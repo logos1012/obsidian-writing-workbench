@@ -1,0 +1,15 @@
+node_modules/
+main.js
+dist/
+coverage/
+.DS_Store
+*.log
+.test-artifacts/
+참고자료/
+참고자료/
+.env
+.env.*
+!.env.example
+.obsidian/
+state/
+data.json
