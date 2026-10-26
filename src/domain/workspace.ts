@@ -1,5 +1,5 @@
 import { AgentReplySchema, id, now, type Preferences, type Project, type Provider, type Settings } from './model';
-import { acceptSuggestion, ConflictError, validateSuggestions } from './review';
+import { acceptSuggestion, undoSuggestion, ConflictError, validateSuggestions } from './review';
 import { buildPrompt, type Task } from './prompt';
 import type { Agent } from '../providers/cli';
 
@@ -70,7 +70,7 @@ export class Workspace {
       if (!request.trim()) throw new Error('답변이나 요청을 입력해 주세요.');
       const provider = this.project.provider;
       const prompt = buildPrompt(this.project, this.preferences, task, request, research);
-      this.project.messages.push({ id: id(), role: 'user', text: request, provider, createdAt: now() });
+      this.project.messages.push({ id: id(), role: 'user', text: request, provider, createdAt: now(), task });
       await this.persist();
       this.status = `${provider === 'claude' ? 'Claude Code' : 'Codex'} 응답을 기다리는 중`;
       const signal = this.aborter!.signal;
@@ -87,7 +87,7 @@ export class Workspace {
       if (task === 'review') validateSuggestions(this.project.draft, reply.suggestions);
       if (sourceIds.size !== reply.sources.length) throw new Error('AI 응답에 중복된 출처 ID가 있습니다. 다시 검토해 주세요.');
       if (reply.suggestions.some(s => s.sourceIds.some(source => !sourceIds.has(source)))) throw new Error('수정 제안의 출처 연결이 올바르지 않습니다. 다시 검토해 주세요.');
-      this.project.messages.push({ id: id(), role: 'assistant', text: [reply.message, reply.question].filter(Boolean).join('\n\n'), provider, createdAt: now() });
+      this.project.messages.push({ id: id(), role: 'assistant', text: [reply.message, reply.question].filter(Boolean).join('\n\n'), provider, createdAt: now(), task, question: reply.question });
       // Never erase the user's memo with an empty model field.
       for (const memo of reply.memo) {
         const existing = this.project.memo.find(m => m.key === memo.key);
@@ -98,6 +98,7 @@ export class Workspace {
           id: id(), provider, createdAt: now(), original: this.project.draft, expected: this.project.draft,
           message: reply.message, diagnosis: reply.diagnosis, sources: reply.sources,
           suggestions: reply.suggestions.map(s => ({ ...s, id: id(), status: 'pending' })),
+          decisions: [],
         });
       }
       for (const proposal of reply.preferences) {
@@ -119,9 +120,27 @@ export class Workspace {
         this.project.draft = next; review.expected = next;
       }
       proposal.status = decision;
+      review.decisions.push({ suggestionId, action: decision, createdAt: now() });
       try { await this.persist(); }
       catch (error) { this.project = previous; throw error; }
       this.status = decision === 'accepted' ? '작업 원고에 반영했습니다. 파일에 저장하려면 원고 저장을 누르세요.' : '거절한 제안을 기록했습니다';
+    });
+  }
+  async undoAcceptance(reviewId: string, suggestionId: string): Promise<void> {
+    await this.operation(async () => {
+      const review = this.project.reviews.find(r => r.id === reviewId);
+      const proposal = review?.suggestions.find(s => s.id === suggestionId);
+      if (!review || !proposal) throw new Error('되돌릴 제안을 찾을 수 없습니다.');
+      const next = undoSuggestion(this.project, review, suggestionId);
+      const previous = structuredClone(this.project);
+      this.snapshot('수락 취소 전');
+      if (!review.decisions.some(event => event.suggestionId === suggestionId)) {
+        review.decisions.push({ suggestionId, action: 'accepted', createdAt: review.createdAt });
+      }
+      this.project.draft = next; review.expected = next; proposal.status = 'pending';
+      review.decisions.push({ suggestionId, action: 'accept-undone', createdAt: now() });
+      try { await this.persist(); } catch (error) { this.project = previous; throw error; }
+      this.status = '수락을 취소하고 원래 구절로 되돌렸습니다. 저장한 파일에도 반영하려면 원고 저장을 누르세요.';
     });
   }
   private snapshot(label: string): void {

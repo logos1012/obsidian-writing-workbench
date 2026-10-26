@@ -13,7 +13,24 @@ export function acceptSuggestion(project: Project, review: Review, suggestionId:
   const proposal = review.suggestions.find(s => s.id === suggestionId);
   if (!proposal || proposal.status !== 'pending') throw new ConflictError('이미 처리했거나 존재하지 않는 제안입니다.');
   if (project.draft !== review.expected) throw new ConflictError();
-  return replaceUnique(project.draft, proposal.before, proposal.after);
+  if (review.expected !== composeReview(review)) throw new ConflictError();
+  return composeReview(review, suggestionId, true);
+}
+// Rebuild from original ranges, rather than searching for replacement text that
+// may be empty, duplicated, or introduced by another accepted proposal.
+export function composeReview(review: Review, overrideId?: string, accepted?: boolean): string {
+  validateSuggestions(review.original, review.suggestions);
+  const applied = review.suggestions.filter(s => s.id === overrideId ? accepted : s.status === 'accepted')
+    .map(s => ({ ...s, index: review.original.indexOf(s.before) })).sort((a, b) => b.index - a.index);
+  return applied.reduce((text, s) => text.slice(0, s.index) + s.after + text.slice(s.index + s.before.length), review.original);
+}
+export function undoSuggestion(project: Project, review: Review, suggestionId: string): string {
+  const proposal = review.suggestions.find(s => s.id === suggestionId);
+  if (!proposal || proposal.status !== 'accepted') throw new ConflictError('수락한 제안만 되돌릴 수 있습니다.');
+  if (project.draft !== review.expected || review.expected !== composeReview(review)) {
+    throw new ConflictError('수락 이후 원고가 따로 수정되어 자동으로 되돌리지 않았습니다. 이력에서 이전 원고를 확인해 주세요.');
+  }
+  return composeReview(review, suggestionId, false);
 }
 export function validateSuggestions(original: string, proposals: AgentReply['suggestions']): void {
   const ranges: { start: number; end: number }[] = [];

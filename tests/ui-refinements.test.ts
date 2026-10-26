@@ -58,7 +58,7 @@ describe('reading position', () => {
     await ws.chooseProvider('codex');
     expect(host.querySelector<HTMLDetailsElement>('.ww-revision')?.open).toBe(true);
     expect(host.querySelector<HTMLDetailsElement>('.ww-materials')?.open).toBe(true);
-    click(host, '인터뷰'); expect(host.querySelector('.ww-side')?.scrollTop).toBe(120);
+    click(host, '글감 찾기'); expect(host.querySelector('.ww-side')?.scrollTop).toBe(120);
     click(host, '이력'); expect(host.querySelector('.ww-side')?.scrollTop).toBe(360);
   });
 });
@@ -81,7 +81,7 @@ describe('formatted prose and explicit editing', () => {
     const h = harness(); h.agent.run = async () => ({ ...reply, message: '**요점**\n\n- 하나\n- 둘', suggestions: [{ ...reply.suggestions[0]!, reason: '**근거 보강**이 필요합니다.' }] });
     await h.ws.run('review', '검토', false);
     const { host } = mount(h);
-    expect(host.querySelector('.ww-message strong')?.textContent).toBe('요점');
+    expect(host.querySelector('.ww-message')).toBeNull();
     click(host, '검토'); expect(host.querySelector('.ww-review-summary strong')?.textContent).toBe('요점');
     expect(host.querySelector('.ww-reason strong')?.textContent).toBe('근거 보강');
     expect(host.querySelector('.ww-before')?.textContent).toBe('효율이 좋아졌다.');
@@ -93,12 +93,12 @@ describe('formatted prose and explicit editing', () => {
     const { host } = mount(h);
     expect(host.querySelector('.ww-memo-content strong')?.textContent).toBe('나의 관점');
     expect(host.querySelector('.ww-memo-input')).toBeNull();
-    host.querySelector<HTMLButtonElement>('[aria-label="관점 수정"]')!.click();
+    host.querySelector<HTMLElement>('.ww-memo-reader')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     const input = host.querySelector<HTMLTextAreaElement>('[aria-label="관점 편집"]')!;
     input.value = '바꾼 관점'; input.dispatchEvent(new Event('input'));
     expect(h.ws.project.memo[0]?.text).toBe('**나의 관점**입니다.');
     click(host, '취소'); expect(host.querySelector('.ww-memo-content strong')?.textContent).toBe('나의 관점');
-    host.querySelector<HTMLButtonElement>('[aria-label="관점 수정"]')!.click();
+    host.querySelector<HTMLElement>('.ww-memo-reader')!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     const next = host.querySelector<HTMLTextAreaElement>('[aria-label="관점 편집"]')!; next.value = '저장할 관점'; next.dispatchEvent(new Event('input'));
     click(host, '저장'); await settled();
     expect(h.projectStore.value?.memo[0]?.text).toBe('저장할 관점'); expect(host.querySelector('.ww-memo-input')).toBeNull();

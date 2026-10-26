@@ -1,7 +1,7 @@
 {
   "id": "writing-workbench",
   "name": "Writing Workbench",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.8.0",
   "description": "내 생각으로 쓰고, AI와 검토하는 LinkedIn 글쓰기 작업실.",
   "author": "Jake",

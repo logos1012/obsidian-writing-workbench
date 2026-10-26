@@ -1,8 +1,9 @@
 import type { Workspace } from '../domain/workspace';
-import { memoKeys, safeSourceUrl, type Provider, type Review } from '../domain/model';
+import { memoKeys, safeSourceUrl, type Project, type Provider, type Review } from '../domain/model';
 import { markdown } from './markdown';
 import { ColumnResizer, defaultWidths, type ColumnWidths } from './layout';
 import { ViewState } from './view-state';
+import { linkedinPreview } from './linkedin-preview';
 
 export interface Actions {
   newProject(): void; openProject(): void; addMaterial(): void; settings(): void; recoverProject?(): void;
@@ -92,7 +93,7 @@ export class WorkbenchUI {
     const banner = element('section', 'ww-activity'); banner.setAttribute('aria-label', 'AI 실행 상태');
     const spinner = element('span', 'ww-spinner'); spinner.setAttribute('aria-hidden', 'true');
     const body = element('div', 'ww-activity-body');
-    const title = element('strong', '', `${providerName(activity.provider)} · ${{ interview: '인터뷰 진행 중', outline: '개요 정리 중', review: '원고 검토 중' }[activity.task]}`);
+    const title = element('strong', '', `${providerName(activity.provider)} · ${{ interview: '글감 찾기 진행 중', outline: '개요 정리 중', review: '원고 검토 중' }[activity.task]}`);
     title.setAttribute('role', 'status');
     const phase = { preparing: '연결을 준비하고 있습니다', running: '실행 중 · AI 응답을 기다리고 있습니다', processing: '받은 결과를 정리하고 있습니다', cancelling: '요청을 중지하고 있습니다' }[activity.phase];
     body.append(title, element('span', '', phase), element('small', '', activity.research ? '외부 자료 검색을 허용한 요청입니다. 결과가 완성되면 표시합니다.' : '결과가 완성되면 표시합니다. 기다리는 동안 다른 글로 이동하지 않아도 됩니다.'));
@@ -106,23 +107,41 @@ export class WorkbenchUI {
     const ws = this.workspace;
     const panel = element('section', 'ww-memo ww-panel'); panel.setAttribute('aria-label', '글의 방향과 자료');
     panel.dataset.wwScroll = 'memo';
-    panel.append(element('h2', 'ww-panel-title', '글의 방향'), element('p', 'ww-hint', '대화에서 정리한 관점과 근거입니다. 필요한 항목만 수정하세요.'));
+    panel.append(element('h2', 'ww-panel-title', '글의 방향'), element('p', 'ww-hint', '내용을 두 번 클릭하면 바로 수정할 수 있어요. 키보드로는 항목을 선택한 뒤 Enter를 누르세요.'));
     for (const key of memoKeys) {
       const section = element('section', 'ww-memo-section'); section.dataset.wwAnchor = `memo-${key}`;
       const heading = element('div', 'ww-memo-heading'); heading.append(element('h3', '', key));
       const text = ws.project.memo.find(m => m.key === key)?.text ?? '';
       if (!this.memoEdits.has(key)) {
-        const edit = this.button('수정', () => { this.memoEdits.set(key, text); this.render(); }, 'ww-text-button'); edit.setAttribute('aria-label', `${key} 수정`); heading.append(edit);
-        section.append(heading, text.trim() ? markdown(text, 'ww-memo-content') : element('p', 'ww-memo-empty', key === '관점' ? '어떤 이야기를 전하고 싶은가요?' : '인터뷰를 진행하면 여기에 정리됩니다.'));
+        section.classList.add('ww-memo-reader'); section.tabIndex = ws.busy ? -1 : 0;
+        section.dataset.wwFocus = `memo-reader-${key}`;
+        section.setAttribute('aria-label', `${key} — 두 번 클릭하거나 Enter로 편집`);
+        section.setAttribute('aria-keyshortcuts', 'Enter');
+        const edit = () => {
+          if (ws.busy) return;
+          this.memoEdits.set(key, text); this.render();
+          const input = [...this.host.querySelectorAll<HTMLTextAreaElement>('.ww-memo-input')].find(node => node.dataset.wwFocus === `memo-edit-${key}`);
+          input?.focus({ preventScroll: true });
+        };
+        section.addEventListener('dblclick', event => { if (!(event.target as Element).closest('a,button')) edit(); });
+        section.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === section && !event.isComposing) { event.preventDefault(); edit(); } });
+        section.append(heading, text.trim() ? markdown(text, 'ww-memo-content') : element('p', 'ww-memo-empty', key === '관점' ? '어떤 이야기를 전하고 싶은가요?' : '글감을 찾는 대화에서 여기에 정리됩니다.'));
       } else {
         const area = element('textarea', 'ww-memo-input'); area.rows = key === '개요' ? 8 : 5;
         area.value = this.memoEdits.get(key)!; area.disabled = ws.busy; area.setAttribute('aria-label', `${key} 편집`); area.dataset.wwFocus = `memo-edit-${key}`; area.dataset.wwScroll = `memo-editor-${key}`;
         area.addEventListener('input', () => { this.memoEdits.set(key, area.value); });
         const buttons = element('div', 'ww-edit-actions');
-        buttons.append(this.button('저장', async () => {
+        const save = this.button('저장', async () => {
           await ws.edit({ memo: ws.project.memo.map(m => m.key === key ? { ...m, text: this.memoEdits.get(key) ?? '' } : m) });
           this.memoEdits.delete(key); this.render();
-        }, 'mod-cta'), this.button('취소', () => { this.memoEdits.delete(key); this.render(); }));
+        }, 'mod-cta');
+        const cancel = this.button('취소', () => { this.memoEdits.delete(key); this.render(); });
+        buttons.append(save, cancel);
+        area.addEventListener('keydown', event => {
+          if (event.isComposing) return;
+          if (event.key === 'Escape') { event.preventDefault(); cancel.click(); }
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); save.click(); }
+        });
         section.append(heading, area, buttons);
       }
       panel.append(section);
@@ -159,7 +178,7 @@ export class WorkbenchUI {
       const hint = element('p', 'ww-hint', '초안은 직접 써 주세요. AI 제안은 수락할 때만 작업 원고에 반영됩니다.'); panel.append(hint);
       this.draft = element('textarea', 'ww-draft'); this.draft.setAttribute('aria-label', '원고 작성'); this.draft.spellcheck = false;
       this.draft.dataset.wwScroll = 'draft-editor'; this.draft.dataset.wwFocus = 'draft-editor';
-      this.draft.placeholder = '첫 문장을 적어 보세요.\n\n아직 주제가 없다면 오른쪽에서 인터뷰를 시작해도 좋아요.';
+      this.draft.placeholder = '첫 문장을 적어 보세요.\n\n아직 주제가 없다면 오른쪽의 글감 찾기에서 대화를 시작해도 좋아요.';
       this.draft.value = ws.project.draft; this.draft.disabled = ws.busy;
       this.draft.addEventListener('input', () => {
         const value = this.draft?.value ?? ''; count.textContent = `${Array.from(value).length.toLocaleString()}자`;
@@ -167,12 +186,11 @@ export class WorkbenchUI {
       }); panel.append(this.draft);
     } else {
       const controls = element('div', 'ww-preview-controls');
-      controls.append(this.button('데스크톱', () => { this.mobile = false; this.render(); }, !this.mobile ? 'is-active' : ''), this.button('모바일', () => { this.mobile = true; this.render(); }, this.mobile ? 'is-active' : ''));
-      panel.append(controls, element('p', 'ww-hint', '줄바꿈과 읽기 흐름을 확인하는 예상 화면입니다. 실제 피드의 접힘 위치와는 다를 수 있어요.'));
-      const preview = element('article', `ww-preview ${this.mobile ? 'is-mobile' : ''}`);
-      const header = element('div', 'ww-preview-author'); header.append(element('div', 'ww-avatar', '나'), element('div', '', '내 LinkedIn 글\n전체 공개'));
-      preview.append(header, element('div', 'ww-preview-body', ws.project.draft || '원고를 작성하면 여기에 표시됩니다.'));
-      panel.append(preview);
+      for (const [mobile, label] of [[false, '데스크톱'], [true, '모바일']] as const) {
+        const control = this.button(label, () => { this.mobile = mobile; this.render(); }, this.mobile === mobile ? 'is-active' : '');
+        control.setAttribute('aria-pressed', String(this.mobile === mobile)); controls.append(control);
+      }
+      panel.append(controls, element('p', 'ww-hint', 'LinkedIn 밝은 피드 화면을 참고한 미리보기입니다. 실제 게시 화면과 줄바꿈·접힘 위치는 다를 수 있어요.'), linkedinPreview(ws.project.draft, this.mobile));
       panel.append(this.button('원고 복사', async () => { await navigator.clipboard.writeText(ws.project.draft); ws.status = '원고를 복사했습니다'; this.refreshStatus(); }));
     }
     return panel;
@@ -182,7 +200,7 @@ export class WorkbenchUI {
     panel.dataset.wwScroll = `side-${this.tab}`;
     panel.append(element('h2', 'ww-panel-title', 'AI와 작업'));
     const tabs = element('div', 'ww-tabs');
-    for (const [value, label] of [['interview', '인터뷰'], ['review', '검토'], ['history', '이력']] as const) {
+    for (const [value, label] of [['interview', '글감 찾기'], ['review', '검토'], ['history', '이력']] as const) {
       const button = this.button(label, () => { this.tab = value; this.render(); }, this.tab === value ? 'is-active' : ''); button.setAttribute('aria-pressed', String(this.tab === value)); button.dataset.wwFocus = `tab-${value}`; tabs.append(button);
     }
     panel.append(tabs);
@@ -195,38 +213,55 @@ export class WorkbenchUI {
     const ws = this.workspace;
     const form = element('form', 'ww-composer');
     const input = element('textarea'); input.rows = 4; input.value = this.input; input.disabled = ws.busy;
-    input.setAttribute('aria-label', review ? '검토 요청' : '인터뷰 답변');
+    input.setAttribute('aria-label', review ? '검토 요청' : '글감 찾기 답변');
     input.dataset.wwScroll = 'composer'; input.dataset.wwFocus = 'composer';
-    input.placeholder = review ? '특히 확인하고 싶은 주장이나 표현을 알려 주세요.' : '경험이나 생각을 편하게 적어 주세요.';
+    input.placeholder = review ? '특히 확인하고 싶은 주장이나 표현을 알려 주세요.' : '질문에 대한 내 경험과 생각을 적어 주세요. 짧게 답해도 괜찮아요.';
     input.addEventListener('input', () => {
       this.input = input.value;
       void ws.edit({ composer: this.input }).then(() => this.refreshStatus()).catch(error => this.showError(error));
     }); form.append(input);
     const label = element('label', 'ww-research'); const check = element('input'); check.type = 'checkbox'; check.checked = this.research; check.disabled = ws.busy;
     check.addEventListener('change', () => { this.research = check.checked; }); label.append(check, document.createTextNode('이번 요청에 외부 자료 검색 허용')); form.append(label);
-    const submit = this.button(review ? '전체 진단과 수정 제안 받기' : '답변 보내기', async () => {
+    const started = ws.project.messages.some(m => m.task !== 'review');
+    const submit = this.button(review ? '전체 진단과 수정 제안 받기' : started ? '답변 보내기' : '글감 찾기 시작', async () => {
       const request = this.input.trim() || (review ? '현재 초안을 전체 진단하고 문장별 개선과 근거 확인이 필요한 부분을 제안해 주세요.' : '내 경험에서 LinkedIn 글감을 찾을 수 있도록 첫 질문 하나를 해 주세요.');
       await ws.run(review ? 'review' : 'interview', request, this.research); this.input = ''; await ws.edit({ composer: '' }); this.research = false; this.reviewId = ''; this.render();
     }, 'mod-cta'); form.append(submit);
     form.addEventListener('submit', event => { event.preventDefault(); submit.click(); });
-    input.addEventListener('keydown', event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); submit.click(); } });
+    input.addEventListener('keydown', event => { if (!event.isComposing && (event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); submit.click(); } });
     panel.append(form);
   }
   private renderInterview(panel: HTMLElement): void {
-    const messages = this.workspace.project.messages;
-    if (!messages.length) {
-      const empty = element('div', 'ww-empty'); empty.append(element('h3', '', '어떤 경험을 글로 남길까요?'), element('p', '', '한 번에 하나씩 묻고, 답변에서 주제와 관점을 함께 찾습니다. 초안은 직접 쓰게 됩니다.'));
-      panel.append(empty);
+    const messages = this.workspace.project.messages.filter(m => m.task !== 'review');
+    const intro = element('div', 'ww-interview-guide');
+    intro.append(element('h3', '', '내 경험에서 글의 주제 찾기'), element('p', '', 'AI가 한 번에 하나씩 질문하고, 내 답변에서 관점과 개요를 정리합니다. 초안은 직접 작성해요.'));
+    panel.append(intro);
+    if (messages.length > 2) {
+      const earlier = element('details', 'ww-earlier-conversation'); earlier.dataset.wwDetail = 'earlier-conversation';
+      earlier.append(element('summary', '', `이전 대화 ${messages.length - 2}개 보기`));
+      for (const message of messages.slice(0, -2)) earlier.append(this.conversationMessage(message));
+      panel.append(earlier);
     }
     const conversation = element('div', 'ww-conversation');
-    for (const msg of messages) {
-      const item = element('article', `ww-message is-${msg.role}`);
-      item.append(element('div', 'ww-message-meta', `${msg.role === 'user' ? '나' : providerName(msg.provider)} · ${time(msg.createdAt)}`), markdown(msg.text)); conversation.append(item);
-    }
+    for (const msg of messages.slice(-2)) conversation.append(this.conversationMessage(msg));
     panel.append(conversation); this.composer(panel, false);
     if (messages.length) panel.append(this.button('지금까지 개요로 정리', async () => {
       await this.workspace.run('outline', '지금까지의 대화로 글의 주제·관점·개요를 정리해 주세요. 초안은 제가 직접 쓰겠습니다.', false);
     }, 'ww-outline-button'));
+  }
+  private conversationMessage(msg: Project['messages'][number]): HTMLElement {
+    const item = element('article', `ww-message is-${msg.role}`);
+    const meta = element('div', 'ww-message-meta');
+    meta.append(element('strong', '', msg.role === 'user' ? '나의 답변' : providerName(msg.provider)), element('time', '', time(msg.createdAt))); item.append(meta);
+    const question = msg.role === 'assistant' ? msg.question?.trim() : '';
+    const messageText = msg.text.trimEnd();
+    const text = question && messageText.endsWith(question) ? messageText.slice(0, -question.length).trimEnd() : messageText;
+    if (text) item.append(markdown(text, 'ww-message-body'));
+    if (question) {
+      const block = element('div', 'ww-message-question');
+      block.append(element('span', 'ww-question-label', '이번 질문'), markdown(question)); item.append(block);
+    }
+    return item;
   }
   private renderReview(panel: HTMLElement): void {
     const ws = this.workspace;
@@ -257,7 +292,10 @@ export class WorkbenchUI {
           accept.disabled = ws.busy || review.expected !== ws.project.draft;
           if (review.expected !== ws.project.draft) accept.title = '원고가 바뀌어 다시 검토해야 합니다';
           decisionControls.append(accept, this.button('거절', () => ws.decide(review.id, suggestion.id, 'rejected')));
-        } else decisionControls.append(element('span', 'ww-badge', suggestion.status === 'accepted' ? '수락함' : '거절함'));
+        } else {
+          decisionControls.append(element('span', 'ww-badge', suggestion.status === 'accepted' ? '수락함' : '거절함'));
+          if (suggestion.status === 'accepted') decisionControls.append(this.button('수락 취소', () => ws.undoAcceptance(review.id, suggestion.id), 'ww-undo'));
+        }
         card.append(decisionControls);
         panel.append(card);
       }
@@ -283,8 +321,16 @@ export class WorkbenchUI {
       const item = element('details', 'ww-revision'); item.dataset.wwDetail = `revision-${revision.id}`; item.append(element('summary', '', `${revision.label} · ${time(revision.createdAt)}`));
       item.append(markdown(revision.text || '(빈 원고)', 'ww-revision-content'), this.button('작업 원고로 복원', () => this.workspace.restoreRevision(revision.id))); panel.append(item);
     }
-    const decisions = this.workspace.project.reviews.flatMap(r => r.suggestions.filter(s => s.status !== 'pending').map(s => ({ ...s, provider: r.provider })));
+    const decisions = this.workspace.project.reviews.flatMap(r => {
+      const logged = new Set(r.decisions.map(event => event.suggestionId));
+      const legacy = r.suggestions.filter(s => s.status !== 'pending' && !logged.has(s.id)).map(s => ({ ...s, label: s.status === 'accepted' ? '수락' : '거절', eventId: s.id, provider: r.provider }));
+      const events = r.decisions.flatMap((event, index) => {
+        const proposal = r.suggestions.find(s => s.id === event.suggestionId);
+        return proposal ? [{ ...proposal, label: { accepted: '수락', rejected: '거절', 'accept-undone': '수락 취소' }[event.action], eventId: `${r.id}-${index}`, provider: r.provider }] : [];
+      });
+      return [...legacy, ...events];
+    });
     if (decisions.length) panel.append(element('h3', '', '수정 결정 기록'));
-    for (const decision of decisions) { const item = element('details', 'ww-revision'); item.dataset.wwDetail = `decision-${decision.id}`; item.append(element('summary', '', `${decision.status === 'accepted' ? '수락' : '거절'} · ${providerName(decision.provider)}`), markdown(decision.reason), element('del', 'ww-before', decision.before), element('ins', 'ww-after', decision.after)); panel.append(item); }
+    for (const decision of decisions) { const item = element('details', 'ww-revision'); item.dataset.wwDetail = `decision-${decision.eventId}`; item.append(element('summary', '', `${decision.label} · ${providerName(decision.provider)}`), markdown(decision.reason), element('del', 'ww-before', decision.before), element('ins', 'ww-after', decision.after)); panel.append(item); }
   }
 }

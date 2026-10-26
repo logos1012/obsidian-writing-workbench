@@ -26,7 +26,9 @@
 .ww-memo-section { padding: 18px 0; border-bottom: 1px solid var(--background-modifier-border); }
 .ww-memo-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .ww-memo-heading h3 { font-size: 14px; font-weight: 750; color: var(--text-normal); margin: 0; padding-left: 9px; border-left: 3px solid var(--ww-blue); }
-.ww-memo-heading .ww-text-button { flex-shrink: 0; font-size: 11px; }
+.ww-memo-reader { cursor: text; border-radius: 4px; transition: background .15s ease; }
+.ww-memo-reader:hover { background: var(--background-modifier-hover); }
+.ww-memo-reader:focus-visible { outline: 2px solid var(--ww-blue); outline-offset: 4px; }
 .ww-memo-empty { color: var(--text-faint); font-size: 13px; line-height: 1.75; margin: 0; }
 .ww-root textarea { font-family: var(--font-text); font-size: 13px; width: 100%; resize: none; line-height: 1.7; background: var(--background-primary); }
 .ww-root .ww-memo-input { padding: 10px; min-height: 120px; border: 1px solid var(--background-modifier-border); }
@@ -48,10 +50,22 @@
 .ww-side { background: var(--background-primary); }
 .ww-empty { padding: 18px 0; line-height: 1.8; font-size: 14px; color: var(--text-muted); }
 .ww-empty h3 { color: var(--text-normal); font-size: 18px; line-height: 1.5; }
-.ww-conversation { display: flex; flex-direction: column; gap: 18px; }
-.ww-message { padding: 0 0 16px; border-bottom: 1px solid var(--background-modifier-border); }
-.ww-message.is-user { border-left: 3px solid var(--background-modifier-border); padding-left: 12px; }
-.ww-message-meta { color: var(--text-muted); font-size: 11px; }
+.ww-interview-guide { padding: 0 0 18px; margin-bottom: 20px; border-bottom: 1px solid var(--background-modifier-border); }
+.ww-interview-guide h3 { margin: 0 0 8px; font-size: 17px; line-height: 1.5; }
+.ww-interview-guide p { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.85; }
+.ww-conversation { display: flex; flex-direction: column; gap: 24px; }
+.ww-message { min-width: 0; }
+.ww-message.is-user { padding: 14px 16px; border-radius: 8px; background: var(--background-secondary); }
+.ww-message-meta { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; flex-wrap: wrap; color: var(--text-muted); font-size: 11px; }
+.ww-message-meta strong { color: var(--text-normal); font-size: 12px; }
+.ww-message-meta time { font-variant-numeric: tabular-nums; }
+.ww-message-question { margin-top: 18px; padding: 14px 16px; border-left: 3px solid var(--ww-blue); background: color-mix(in srgb, var(--ww-blue) 6%, var(--background-primary)); }
+.ww-question-label { font-size: 11px; font-weight: 700; color: var(--ww-blue); }
+.ww-message .ww-message-question .ww-markdown { font-size: 16px; line-height: 1.85; margin-top: 8px; }
+.ww-earlier-conversation { margin: 0 0 22px; padding-bottom: 14px; border-bottom: 1px solid var(--background-modifier-border); }
+.ww-earlier-conversation > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.ww-earlier-conversation > .ww-message { margin-top: 22px; }
+.ww-root .ww-outline-button { margin-top: 12px; width: 100%; background: transparent; box-shadow: none; border: 1px solid var(--background-modifier-border); color: var(--text-muted); }
 .ww-markdown { line-height: 1.8; font-size: 14px; overflow-wrap: anywhere; white-space: normal; }
 .ww-markdown > :first-child { margin-top: 0; }
 .ww-markdown > :last-child { margin-bottom: 0; }
@@ -72,6 +86,7 @@
 .ww-markdown.ww-hint { font-size: 12px; }
 .ww-message .ww-markdown { margin-top: 10px; }
 .ww-composer { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--background-modifier-border); }
+.ww-composer textarea { padding: 12px; font-size: 14px; line-height: 1.85; }
 .ww-research { display: flex; gap: 7px; align-items: center; margin: 9px 0 14px; font-size: 12px; color: var(--text-muted); }
 .ww-research input { margin: 0; }
 .ww-composer > button { width: 100%; min-height: 34px; }
@@ -89,14 +104,34 @@
 .ww-decision-controls { display: flex; gap: 8px; align-items: center; margin-top: 12px; min-height: 32px; }
 .ww-decision-controls .ww-badge { margin: 0; }
 .ww-accept { color: var(--text-on-accent); background: var(--interactive-accent) !important; }
+.ww-root .ww-undo { background: transparent; box-shadow: none; border: 1px solid var(--background-modifier-border); font-size: 12px; }
 .ww-badge { display: inline-block; font-size: 11px; color: var(--text-muted); background: var(--background-secondary); padding: 3px 6px; margin: 6px 5px 0 0; border-radius: 4px; }
 .ww-source { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
 .ww-source a { display: block; }
-.ww-preview { margin: 20px auto; width: 100%; max-width: 550px; border: 1px solid var(--background-modifier-border); border-radius: 9px; padding: 20px; }
-.ww-preview.is-mobile { max-width: 330px; padding: 16px; }
-.ww-preview-author { display: flex; align-items: center; gap: 12px; white-space: pre-line; font-size: 13px; line-height: 1.5; }
-.ww-avatar { width: 42px; height: 42px; background: var(--background-secondary); display: grid; place-items: center; border-radius: 50%; }
-.ww-preview-body { white-space: pre-wrap; font-size: 14px; line-height: 1.65; margin-top: 20px; overflow-wrap: anywhere; }
+.ww-linkedin-screen { color-scheme: light; width: 100%; max-width: 680px; margin: 14px auto; border: 1px solid #d8d8d8; border-radius: 10px; overflow: hidden; background: #f3f2ef; color: #191919; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; flex-shrink: 0; }
+.ww-linkedin-screen svg { width: 22px; height: 22px; flex-shrink: 0; }
+.ww-linkedin-nav { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid #deddda; background: #fff; color: #666; }
+.ww-linkedin-brand { display: grid; place-items: center; background: #0a66c2; color: #fff; font: bold 27px/1 Arial, sans-serif; width: 32px; height: 32px; border-radius: 3px; letter-spacing: -1px; flex-shrink: 0; }
+.ww-linkedin-search { display: flex; align-items: center; gap: 9px; padding: 7px 10px; background: #edf3f8; border-radius: 4px; flex: 1; color: #56616b; font-size: 12px; }
+.ww-linkedin-search svg { width: 16px; height: 16px; }
+.ww-linkedin-feed { padding: clamp(8px, 3%, 24px); min-height: 340px; }
+.ww-linkedin-post { background: #fff; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+.ww-linkedin-author { display: flex; align-items: flex-start; gap: 10px; padding: 16px 14px 0; }
+.ww-linkedin-avatar { width: 42px; height: 42px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: #dce6e9; color: #40555c; font-weight: 600; font-size: 16px; }
+.ww-linkedin-identity { display: grid; gap: 2px; min-width: 0; flex: 1; line-height: 1.4; }
+.ww-linkedin-identity strong { font-size: 14px; color: #191919; }
+.ww-linkedin-headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #666; }
+.ww-linkedin-visibility { display: flex; gap: 4px; align-items: center; font-size: 11px; color: #666; }
+.ww-linkedin-visibility svg { width: 12px; height: 12px; }
+.ww-linkedin-menu { color: #666; font-size: 22px; line-height: 1; }
+.ww-linkedin-body { white-space: pre-wrap; overflow-wrap: anywhere; padding: 18px 14px 24px; font-size: 14px; line-height: 1.65; color: #191919; }
+.ww-linkedin-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0 12px; padding: 12px 0; border-top: 1px solid #e8e8e8; color: #666; }
+.ww-linkedin-action { display: flex; flex-direction: column; align-items: center; gap: 5px; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.ww-linkedin-screen.is-mobile { max-width: 390px; border-radius: 16px; }
+.ww-linkedin-screen.is-mobile .ww-linkedin-feed { padding: 12px 0 28px; }
+.ww-linkedin-screen.is-mobile .ww-linkedin-post { border-radius: 0; border-left: 0; border-right: 0; }
+.ww-linkedin-mobile-nav { display: flex; justify-content: space-around; padding: 10px 6px; background: #fff; border-top: 1px solid #ddd; color: #666; }
+.ww-linkedin-mobile-nav > span { display: grid; justify-items: center; gap: 5px; font-size: 10px; }
 .ww-revision { margin: 12px 0; padding: 12px 0; border-bottom: 1px solid var(--background-modifier-border); }
 .ww-revision summary { font-size: 12px; cursor: pointer; }
 .ww-revision pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 350px; overflow-y: auto; font-family: var(--font-text); font-size: 13px; }

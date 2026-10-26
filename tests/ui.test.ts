@@ -10,6 +10,7 @@ describe('workbench UI', () => {
     await h.ws.run('review', '검토', false);
     const host = document.createElement('div'); document.body.append(host);
     new WorkbenchUI(host, h.ws, { newProject() {}, openProject() {}, addMaterial() {}, settings() {} });
+    [...host.querySelectorAll('button')].find(b => b.textContent === '검토')!.click();
     expect(host.querySelectorAll('script,img')).toHaveLength(0);
     expect(host.textContent).toContain('<script>alert(1)</script>');
   });
@@ -32,10 +33,10 @@ describe('workbench UI', () => {
     const h = harness(); const host = document.createElement('div'); document.body.append(host);
     const actions = { newProject() {}, openProject() {}, addMaterial() {}, settings() {} };
     const ui = new WorkbenchUI(host, h.ws, actions);
-    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="인터뷰 답변"]')!;
+    const input = host.querySelector<HTMLTextAreaElement>('[aria-label="글감 찾기 답변"]')!;
     input.value = '아직 보내지 않은 경험 이야기'; input.dispatchEvent(new Event('input', { bubbles: true }));
     await h.ws.flush(); ui.destroy(); new WorkbenchUI(host, h.ws, actions);
-    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="인터뷰 답변"]')!.value).toBe('아직 보내지 않은 경험 이야기');
+    expect(host.querySelector<HTMLTextAreaElement>('[aria-label="글감 찾기 답변"]')!.value).toBe('아직 보내지 않은 경험 이야기');
     expect(h.projectStore.value?.composer).toBe('아직 보내지 않은 경험 이야기');
   });
 });

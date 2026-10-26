@@ -47,6 +47,8 @@ export type Preferences = z.infer<typeof PreferencesSchema>;
 const MessageSchema = z.object({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(),
   provider: ProviderSchema, createdAt: z.string(),
+  task: z.enum(['interview', 'outline', 'review']).optional(),
+  question: z.string().optional(),
 }).strict();
 const ReviewSchema = z.object({
   id: z.string(), provider: ProviderSchema, createdAt: z.string(),
@@ -55,6 +57,9 @@ const ReviewSchema = z.object({
   suggestions: z.array(ProposalSchema.extend({
     id: z.string(), status: z.enum(['pending', 'accepted', 'rejected']),
   })),
+  decisions: z.array(z.object({
+    suggestionId: z.string(), action: z.enum(['accepted', 'rejected', 'accept-undone']), createdAt: z.string(),
+  }).strict()).default([]),
 }).strict();
 export type Review = z.infer<typeof ReviewSchema>;
 const RevisionSchema = z.object({
