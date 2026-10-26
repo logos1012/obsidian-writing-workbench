@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 export interface ProcessRequest {
   executable: string; args: string[]; cwd: string; input: string;
   signal: AbortSignal; timeoutMs: number; env?: NodeJS.ProcessEnv;
+  onStart?: () => void;
 }
 export interface ProcessResult { stdout: string; stderr: string }
 export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
@@ -15,6 +16,7 @@ export function runProcess(request: ProcessRequest): Promise<ProcessResult> {
       cwd: request.cwd, env: request.env ?? process.env, shell: false,
       detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
     });
+    child.once('spawn', () => request.onStart?.());
     const kill = (signal: NodeJS.Signals) => {
       try {
         if (child.pid && process.platform !== 'win32') process.kill(-child.pid, signal);

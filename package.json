@@ -1,6 +1,6 @@
 {
   "name": "obsidian-writing-workbench",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Interview, draft and review LinkedIn writing in Obsidian with local Claude Code and Codex.",
   "scripts": {
@@ -15,10 +15,12 @@
     "node": ">=22"
   },
   "dependencies": {
+    "markdown-it": "14.3.3",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/jsdom": "30.0.0",
+    "@types/markdown-it": "14.2.0",
     "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "jsdom": "30.1.3",

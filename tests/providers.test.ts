@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { runProcess } from '../src/providers/process';
 import { buildArgs, resolveExecutable } from '../src/providers/cli';
@@ -9,6 +9,14 @@ describe('CLI execution boundaries', () => {
     const input = '`echo hacked` $(touch /tmp/unwanted) ; 한글';
     const result = await runProcess({ executable: process.execPath, args: ['-e', 'process.stdin.pipe(process.stdout)'], cwd: tmpdir(), input, timeoutMs: 2000, signal: new AbortController().signal });
     expect(result.stdout).toBe(input);
+  });
+  it('reports activity only after the child process has actually started', async () => {
+    const onStart = vi.fn();
+    await runProcess({ executable: process.execPath, args: ['-e', 'process.stdin.resume()'], cwd: tmpdir(), input: '', timeoutMs: 2000, signal: new AbortController().signal, onStart });
+    expect(onStart).toHaveBeenCalledTimes(1);
+    const failedStart = vi.fn();
+    await expect(runProcess({ executable: '/nonexistent/ww-cli', args: [], cwd: tmpdir(), input: '', timeoutMs: 2000, signal: new AbortController().signal, onStart: failedStart })).rejects.toThrow();
+    expect(failedStart).not.toHaveBeenCalled();
   });
   it('kills a long-running process on timeout', async () => {
     await expect(runProcess({ executable: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'], cwd: tmpdir(), input: '', timeoutMs: 50, signal: new AbortController().signal })).rejects.toThrow('초과');

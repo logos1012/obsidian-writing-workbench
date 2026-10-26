@@ -8,6 +8,7 @@ import { Workspace, type DocumentPort } from './domain/workspace';
 import { ConflictError } from './domain/review';
 import { CliAgent, resolveExecutable } from './providers/cli';
 import { WorkbenchUI, element } from './ui/workbench';
+import { LayoutSchema, defaultWidths, type ColumnWidths } from './ui/layout';
 
 const VIEW = 'writing-workbench';
 export default class WritingWorkbenchPlugin extends Plugin {
@@ -16,6 +17,8 @@ export default class WritingWorkbenchPlugin extends Plugin {
   private stateRoot = '';
   private preferenceStore!: JsonStore<Preferences>;
   private opening = false;
+  columnWidths: ColumnWidths = [...defaultWidths];
+  private layoutStore!: JsonStore<{ version: 1; widths: ColumnWidths }>;
 
   async onload(): Promise<void> {
     if (!(this.app.vault.adapter instanceof FileSystemAdapter)) { new Notice('Writing Workbench는 데스크톱 로컬 볼트에서 사용할 수 있습니다.'); return; }
@@ -25,6 +28,9 @@ export default class WritingWorkbenchPlugin extends Plugin {
     this.settings = parsed.success ? parsed.data : { ...defaultSettings };
     if (!parsed.success) new Notice('Writing Workbench 설정 형식이 달라 기본 설정으로 시작합니다. 저장된 작업은 유지됩니다.');
     this.preferenceStore = new JsonStore(join(this.stateRoot, 'preferences.json'), PreferencesSchema);
+    this.layoutStore = new JsonStore(join(this.stateRoot, 'layout.json'), LayoutSchema);
+    try { this.columnWidths = (await this.layoutStore.load())?.widths ?? [...defaultWidths]; }
+    catch { new Notice('저장한 화면 너비를 읽지 못해 기본 너비로 시작합니다. 원고와 대화는 유지됩니다.'); }
     this.registerView(VIEW, leaf => new WorkbenchView(leaf, this));
     this.addRibbonIcon('pen-line', '글쓰기 작업실', () => { void this.activate().catch(error => this.notice(error)); });
     this.addCommand({ id: 'open-workbench', name: '글쓰기 작업실 열기', callback: () => { void this.activate().catch(error => this.notice(error)); } });
@@ -46,6 +52,10 @@ export default class WritingWorkbenchPlugin extends Plugin {
   onunload(): void { this.workspace?.cancel(); void this.workspace?.flush().catch(error => this.notice(error)); }
   private notice(error: unknown): void { new Notice(error instanceof Error ? error.message : '작업에 실패했습니다.', 8000); }
   async updateSettings(): Promise<void> { await this.saveData(SettingsSchema.parse(this.settings)); }
+  async saveColumnWidths(widths: ColumnWidths): Promise<void> {
+    const value = LayoutSchema.parse({ version: 1, widths });
+    this.columnWidths = value.widths; await this.layoutStore.save(value);
+  }
   openSettings(): void {
     const modal = new Modal(this.app);
     modal.titleEl.setText('Writing Workbench 설정');
@@ -190,6 +200,7 @@ class WorkbenchView extends ItemView {
         newProject: () => { void this.plugin.newProject().catch(error => new Notice(String(error))); },
         openProject: () => this.plugin.pickFile(), addMaterial: () => this.plugin.pickFile(true), settings: () => this.plugin.openSettings(),
         recoverProject: () => { void this.plugin.pickSavedProject().catch(error => new Notice(String(error))); },
+        columnWidths: this.plugin.columnWidths, saveColumnWidths: widths => this.plugin.saveColumnWidths(widths),
       });
     } else {
       const empty = element('div', 'ww-welcome'); empty.append(element('h2', '', '내 생각으로 쓰는 글'), element('p', '', '대화로 글감을 찾고, 직접 쓴 원고를 AI와 함께 다듬으세요.'));

@@ -8,10 +8,15 @@ export interface DocumentPort {
   read(path: string): Promise<string>;
   compareAndSwap(path: string, expected: string, next: string): Promise<void>;
 }
+export interface RequestActivity {
+  provider: Provider; task: Task; research: boolean; startedAt: number;
+  phase: 'preparing' | 'running' | 'processing' | 'cancelling';
+}
 export class Workspace {
   busy = false;
   error = '';
   status = '작업 기록 저장됨';
+  activity: RequestActivity | null = null;
   onChange: () => void = () => undefined;
   private aborter?: AbortController;
   private writes: Promise<void> = Promise.resolve();
@@ -46,13 +51,18 @@ export class Workspace {
     this.project.provider = provider;
     await this.persist(); this.onChange();
   }
-  cancel(): void { this.aborter?.abort(); }
-  private async operation(work: () => Promise<void>): Promise<void> {
+  cancel(): void {
+    if (this.activity) this.activity.phase = 'cancelling';
+    this.aborter?.abort(); this.onChange();
+  }
+  private async operation(work: () => Promise<void>, activity: RequestActivity | null = null): Promise<void> {
     if (this.busy) throw new Error('현재 작업이 끝나거나 중지될 때까지 기다려 주세요.');
-    this.busy = true; this.error = ''; this.onChange();
+    this.busy = true; this.error = ''; this.activity = activity;
+    if (activity) this.aborter = new AbortController();
+    this.onChange();
     try { await this.flush(); await work(); }
     catch (error) { this.error = error instanceof Error ? error.message : '작업에 실패했습니다.'; throw error; }
-    finally { this.busy = false; this.aborter = undefined; this.onChange(); }
+    finally { this.busy = false; this.aborter = undefined; this.activity = null; this.onChange(); }
   }
   async run(task: Task, request: string, research: boolean): Promise<void> {
     await this.operation(async () => {
@@ -63,9 +73,14 @@ export class Workspace {
       this.project.messages.push({ id: id(), role: 'user', text: request, provider, createdAt: now() });
       await this.persist();
       this.status = `${provider === 'claude' ? 'Claude Code' : 'Codex'} 응답을 기다리는 중`;
-      this.aborter = new AbortController(); this.onChange();
-      const reply = AgentReplySchema.parse(await this.agent.run({ provider, prompt, research, signal: this.aborter.signal, settings: this.getSettings() }));
-      if (this.aborter.signal.aborted) throw new Error('요청을 중지했습니다.');
+      const signal = this.aborter!.signal;
+      if (signal.aborted) throw new Error('요청을 중지했습니다.');
+      this.onChange();
+      const reply = AgentReplySchema.parse(await this.agent.run({ provider, prompt, research, signal, settings: this.getSettings(), onProgress: phase => {
+        if (!this.activity || signal.aborted) return;
+        this.activity.phase = phase; this.onChange();
+      } }));
+      if (signal.aborted) throw new Error('요청을 중지했습니다.');
       if (task !== 'review' && reply.suggestions.length) throw new Error('인터뷰 응답에 원고 수정이 포함되어 반영하지 않았습니다. 다시 요청해 주세요.');
       if (task === 'interview' && (!reply.question.trim() || (reply.question.match(/[?？]/g)?.length ?? 0) > 1)) throw new Error('AI가 한 번에 한 질문 형식을 지키지 않았습니다. 다시 요청해 주세요.');
       const sourceIds = new Set(reply.sources.map(s => s.id));
@@ -90,7 +105,7 @@ export class Workspace {
       }
       await this.preferencesStore.save(this.preferences);
       await this.persist(); this.status = '검토 결과와 대화를 저장했습니다';
-    });
+    }, { provider: this.project.provider, task, research, startedAt: Date.now(), phase: 'preparing' });
   }
   async decide(reviewId: string, suggestionId: string, decision: 'accepted' | 'rejected'): Promise<void> {
     await this.operation(async () => {

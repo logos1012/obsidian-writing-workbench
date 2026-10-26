@@ -6,6 +6,7 @@ import { runProcess } from './process';
 
 export interface AgentRequest {
   provider: Provider; prompt: string; research: boolean; signal: AbortSignal; settings: Settings;
+  onProgress?: (phase: 'running' | 'processing') => void;
 }
 export interface Agent { run(request: AgentRequest): Promise<AgentReply> }
 export async function resolveExecutable(provider: Provider, configured: string): Promise<string> {
@@ -49,8 +50,9 @@ export class CliAgent implements Agent {
       delete env.CLAUDECODE;
       env.PATH = [join(homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', env.PATH ?? ''].join(':');
       const result = await runProcess({ executable, args: buildArgs(provider, settings, research, directory), cwd: directory,
-        input: request.prompt, timeoutMs: settings.timeoutSeconds * 1000, signal, env });
+        input: request.prompt, timeoutMs: settings.timeoutSeconds * 1000, signal, env, onStart: () => request.onProgress?.('running') });
       if (signal.aborted) throw new Error('요청을 중지했습니다.');
+      request.onProgress?.('processing');
       let data: unknown;
       if (provider === 'claude') {
         let envelope: Record<string, unknown>;
