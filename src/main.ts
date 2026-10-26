@@ -1,7 +1,6 @@
-import { FileSystemAdapter, FuzzySuggestModal, ItemView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, normalizePath } from 'obsidian';
+import { FileSystemAdapter, FuzzySuggestModal, ItemView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf } from 'obsidian';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 import { JsonStore } from './storage/json-store';
 import { ProjectSchema, PreferencesSchema, SettingsSchema, defaultSettings, createProject, type Project, type Preferences, type Settings } from './domain/model';
 import { Workspace, type DocumentPort } from './domain/workspace';
@@ -9,32 +8,38 @@ import { ConflictError } from './domain/review';
 import { CliAgent, resolveExecutable } from './providers/cli';
 import { WorkbenchUI, element } from './ui/workbench';
 import { LayoutSchema, defaultWidths, type ColumnWidths } from './ui/layout';
+import { checkDraftFolder, createDraft, initialDraftFolder, LEGACY_DRAFT_FOLDER } from './storage/draft-folder';
+import { renderFolderSetting } from './ui/folder-setting';
 
 const VIEW = 'writing-workbench';
 export default class WritingWorkbenchPlugin extends Plugin {
-  settings: Settings = defaultSettings;
+  settings: Settings = { ...defaultSettings };
   workspace?: Workspace;
   private stateRoot = '';
   private preferenceStore!: JsonStore<Preferences>;
   private opening = false;
+  private creating = false;
   columnWidths: ColumnWidths = [...defaultWidths];
   private layoutStore!: JsonStore<{ version: 1; widths: ColumnWidths }>;
 
   async onload(): Promise<void> {
-    if (!(this.app.vault.adapter instanceof FileSystemAdapter)) { new Notice('Writing Workbench는 데스크톱 로컬 볼트에서 사용할 수 있습니다.'); return; }
+    if (!(this.app.vault.adapter instanceof FileSystemAdapter)) { new Notice(`${this.manifest.name}은 데스크톱 로컬 볼트에서 사용할 수 있습니다.`); return; }
     this.stateRoot = join(this.app.vault.adapter.getBasePath(), this.app.vault.configDir, 'plugins', this.manifest.id, 'state');
     const stored = await this.loadData();
     const parsed = SettingsSchema.safeParse(stored ?? {});
     this.settings = parsed.success ? parsed.data : { ...defaultSettings };
-    if (!parsed.success) new Notice('Writing Workbench 설정 형식이 달라 기본 설정으로 시작합니다. 저장된 작업은 유지됩니다.');
+    if (parsed.success) {
+      this.settings.draftFolder = initialDraftFolder(stored?.draftFolder, this.app.vault.getAbstractFileByPath(LEGACY_DRAFT_FOLDER) instanceof TFolder);
+    }
+    if (!parsed.success) new Notice(`${this.manifest.name} 설정 형식이 달라 기본 설정으로 시작합니다. 저장된 작업은 유지됩니다.`);
     this.preferenceStore = new JsonStore(join(this.stateRoot, 'preferences.json'), PreferencesSchema);
     this.layoutStore = new JsonStore(join(this.stateRoot, 'layout.json'), LayoutSchema);
     try { this.columnWidths = (await this.layoutStore.load())?.widths ?? [...defaultWidths]; }
     catch { new Notice('저장한 화면 너비를 읽지 못해 기본 너비로 시작합니다. 원고와 대화는 유지됩니다.'); }
     this.registerView(VIEW, leaf => new WorkbenchView(leaf, this));
-    this.addRibbonIcon('pen-line', '글쓰기 작업실', () => { void this.activate().catch(error => this.notice(error)); });
-    this.addCommand({ id: 'open-workbench', name: '글쓰기 작업실 열기', callback: () => { void this.activate().catch(error => this.notice(error)); } });
-    this.addCommand({ id: 'review-current-note', name: '현재 노트를 글쓰기 작업실에 연결', callback: () => {
+    this.addRibbonIcon('pen-line', this.manifest.name, () => { void this.activate().catch(error => this.notice(error)); });
+    this.addCommand({ id: 'open-workbench', name: `${this.manifest.name} 열기`, callback: () => { void this.activate().catch(error => this.notice(error)); } });
+    this.addCommand({ id: 'review-current-note', name: `현재 노트를 ${this.manifest.name}에 연결`, callback: () => {
       const file = this.app.workspace.getActiveFile();
       if (file?.extension === 'md') void this.openFile(file).catch(error => this.notice(error));
       else this.pickFile();
@@ -52,13 +57,26 @@ export default class WritingWorkbenchPlugin extends Plugin {
   onunload(): void { this.workspace?.cancel(); void this.workspace?.flush().catch(error => this.notice(error)); }
   private notice(error: unknown): void { new Notice(error instanceof Error ? error.message : '작업에 실패했습니다.', 8000); }
   async updateSettings(): Promise<void> { await this.saveData(SettingsSchema.parse(this.settings)); }
+  private entryKind(path: string): 'folder' | 'file' | undefined {
+    const entry = this.app.vault.getAbstractFileByPath(path);
+    return entry instanceof TFolder ? 'folder' : entry ? 'file' : undefined;
+  }
+  async saveDraftFolder(value: string): Promise<string> {
+    const folder = checkDraftFolder(value, this.app.vault.configDir, path => this.entryKind(path));
+    const previous = this.settings.draftFolder;
+    this.settings.draftFolder = folder;
+    try { await this.updateSettings(); }
+    catch (error) { this.settings.draftFolder = previous; throw error; }
+    return folder;
+  }
+  pickDraftFolder(select: (path: string) => void): void { new FolderPicker(this, select).open(); }
   async saveColumnWidths(widths: ColumnWidths): Promise<void> {
     const value = LayoutSchema.parse({ version: 1, widths });
     this.columnWidths = value.widths; await this.layoutStore.save(value);
   }
   openSettings(): void {
     const modal = new Modal(this.app);
-    modal.titleEl.setText('Writing Workbench 설정');
+    modal.titleEl.setText(`${this.manifest.name} 설정`);
     const settings = new WorkbenchSettings(this);
     settings.renderInto(modal.contentEl);
     modal.open();
@@ -80,6 +98,7 @@ export default class WritingWorkbenchPlugin extends Plugin {
     };
   }
   async openFile(file: TFile): Promise<void> {
+    if (this.creating) throw new Error('새 글을 만드는 중입니다. 잠시 후 다시 시도해 주세요.');
     if (this.opening) return;
     if (this.workspace?.busy) throw new Error('진행 중인 요청을 중지한 후 다른 글을 열어 주세요.');
     this.opening = true;
@@ -113,6 +132,7 @@ export default class WritingWorkbenchPlugin extends Plugin {
     await this.activate(false);
   }
   async openSavedProject(projectId: string): Promise<void> {
+    if (this.creating) throw new Error('새 글을 만드는 중입니다. 잠시 후 다시 시도해 주세요.');
     if (this.opening) return;
     if (!/^[a-f0-9-]{36}$/.test(projectId)) throw new Error('잘못된 작업 ID입니다.');
     if (this.workspace?.busy) throw new Error('현재 요청을 중지한 뒤 작업을 바꿔 주세요.');
@@ -151,13 +171,18 @@ export default class WritingWorkbenchPlugin extends Plugin {
     if (leaf.view instanceof WorkbenchView) leaf.view.refresh();
   }
   async newProject(): Promise<void> {
-    if (this.workspace?.busy || this.opening) throw new Error('진행 중인 작업을 마친 뒤 새 글을 시작해 주세요.');
-    const folder = 'Writing Workbench';
-    if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
-    const stamp = new Date().toLocaleString('sv-SE').replace(/[: ]/g, '-');
-    let path = normalizePath(`${folder}/새 글 ${stamp}.md`);
-    if (this.app.vault.getAbstractFileByPath(path)) path = normalizePath(`${folder}/새 글 ${stamp}-${createHash('sha256').update(String(Date.now())).digest('hex').slice(0, 6)}.md`);
-    await this.openFile(await this.app.vault.create(path, ''));
+    if (this.workspace?.busy || this.opening || this.creating) throw new Error('진행 중인 작업을 마친 뒤 새 글을 시작해 주세요.');
+    this.creating = true;
+    try {
+      await this.workspace?.flush();
+      const file = await createDraft({
+        kind: path => this.entryKind(path),
+        createFolder: path => this.app.vault.createFolder(path),
+        createNote: path => this.app.vault.create(path, ''),
+      }, this.settings.draftFolder, this.app.vault.configDir);
+      this.creating = false;
+      await this.openFile(file);
+    } finally { this.creating = false; }
   }
   pickFile(material = false): void {
     new NotePicker(this, file => {
@@ -171,6 +196,17 @@ export default class WritingWorkbenchPlugin extends Plugin {
       })().catch(error => this.notice(error));
     }).open();
   }
+}
+class FolderPicker extends FuzzySuggestModal<string> {
+  constructor(private plugin: WritingWorkbenchPlugin, private select: (path: string) => void) { super(plugin.app); this.setPlaceholder('새 글을 저장할 폴더를 선택하세요'); }
+  getItems(): string[] {
+    const paths = this.plugin.app.vault.getAllLoadedFiles().filter((file): file is TFolder => file instanceof TFolder).map(folder => folder.path).filter(path => path && path !== '/');
+    return ['', ...paths.filter(path => {
+      try { checkDraftFolder(path, this.plugin.app.vault.configDir, () => 'folder'); return true; } catch { return false; }
+    }).sort((a, b) => a.localeCompare(b, 'ko'))];
+  }
+  getItemText(path: string): string { return path || '볼트 최상위'; }
+  onChooseItem(path: string): void { this.select(path); }
 }
 class SavedProjectPicker extends FuzzySuggestModal<Project> {
   constructor(private plugin: WritingWorkbenchPlugin, private projects: Project[]) { super(plugin.app); this.setPlaceholder('이전에 작업한 글을 찾아 복원하세요'); }
@@ -188,7 +224,7 @@ class WorkbenchView extends ItemView {
   private ui?: WorkbenchUI;
   constructor(leaf: WorkspaceLeaf, private plugin: WritingWorkbenchPlugin) { super(leaf); }
   getViewType(): string { return VIEW; }
-  getDisplayText(): string { return '글쓰기 작업실'; }
+  getDisplayText(): string { return this.plugin.manifest.name; }
   getIcon(): string { return 'pen-line'; }
   async onOpen(): Promise<void> { this.refresh(); }
   async onClose(): Promise<void> { this.ui?.destroy(); await this.plugin.workspace?.flush(); }
@@ -217,7 +253,8 @@ class WorkbenchSettings extends PluginSettingTab {
     this.renderInto(this.containerEl);
   }
   renderInto(container: HTMLElement): void {
-    container.replaceChildren(); container.append(element('h2', '', 'Writing Workbench'));
+    container.replaceChildren(); container.append(element('h2', '', this.plugin.manifest.name));
+    renderFolderSetting(container, { value: this.plugin.settings.draftFolder, choose: select => this.plugin.pickDraftFolder(select), save: path => this.plugin.saveDraftFolder(path) });
     container.append(element('p', '', '맥에 설치하고 로그인한 CLI를 사용합니다. 선택한 원고·대화·참고 자료는 해당 AI 제공자에게 전달됩니다.'));
     for (const provider of ['claude', 'codex'] as const) {
       const pathKey = `${provider}Path` as const, modelKey = `${provider}Model` as const;

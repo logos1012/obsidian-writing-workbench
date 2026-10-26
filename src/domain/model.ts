@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_DRAFT_FOLDER } from '../storage/draft-folder';
 
 export const ProviderSchema = z.enum(['claude', 'codex']);
 export type Provider = z.infer<typeof ProviderSchema>;
@@ -32,6 +33,7 @@ export type AgentReply = z.infer<typeof AgentReplySchema>;
 export const replyJsonSchema = z.toJSONSchema(AgentReplySchema, { target: 'draft-7' });
 
 export const SettingsSchema = z.object({
+  draftFolder: z.string().default(DEFAULT_DRAFT_FOLDER),
   claudePath: z.string().default(''), codexPath: z.string().default(''),
   claudeModel: z.string().default(''), codexModel: z.string().default(''),
   timeoutSeconds: z.number().int().min(30).max(1800).default(300),
