@@ -122,8 +122,8 @@
 .ww-outline > :first-child { border-top: 0; padding-top: 0; }
 .ww-reason { font-size: 13px; line-height: 1.7; font-weight: 600; }
 .ww-diff-label { display: block; font-size: 10px; color: var(--text-muted); margin: 9px 0 4px; }
-.ww-before, .ww-after { display: block; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; padding: 7px 10px; border-radius: 3px; }
-.ww-before { color: var(--ww-red); background: color-mix(in srgb, var(--ww-red) 7%, transparent); }
+.ww-before, .ww-after { display: block; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; padding: 7px 10px; border-radius: 3px; text-decoration: none; }
+.ww-before { color: var(--ww-red); background: color-mix(in srgb, var(--ww-red) 7%, transparent); text-decoration: none !important; }
 .ww-after { color: var(--ww-green); background: color-mix(in srgb, var(--ww-green) 7%, transparent); text-decoration: none; }
 .ww-decision-controls { display: flex; gap: 8px; align-items: center; margin-top: 12px; min-height: 32px; }
 .ww-decision-controls .ww-badge { margin: 0; }

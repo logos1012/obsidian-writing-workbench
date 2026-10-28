@@ -3,20 +3,46 @@ import { composeReview } from '../domain/review';
 
 export interface TextLocation { start: number; end: number; paragraph: number; line: number }
 
+// Calculate the accepted offset map once per review. Looking up each card used
+// to revalidate every proposal and scan the entire draft, which became costly
+// when pointer movement crossed many suggestions in a long document.
+export function suggestionLocations(draft: string, review: Review): Map<string, TextLocation> {
+  if (draft !== review.expected) return new Map();
+  try { if (composeReview(review) !== draft) return new Map(); } catch { return new Map(); }
+  const ordered = review.suggestions
+    .map(proposal => ({ proposal, originalStart: review.original.indexOf(proposal.before) }))
+    .sort((a, b) => a.originalStart - b.originalStart);
+  const lineStarts: number[] = [], paragraphStarts: number[] = [];
+  for (let i = 0; i < draft.length; i++) {
+    if (draft.charCodeAt(i) === 10) lineStarts.push(i + 1);
+    if (draft.charCodeAt(i) === 10 && (i === 0 || draft.charCodeAt(i - 1) !== 10)) {
+      let next = i + 1;
+      while (next < draft.length && (draft.charCodeAt(next) === 9 || draft.charCodeAt(next) === 32)) next++;
+      if (draft.charCodeAt(next) === 10) {
+        while (draft.charCodeAt(next) === 10) next++;
+        paragraphStarts.push(next);
+      }
+    }
+  }
+  const countThrough = (starts: number[], index: number) => {
+    let low = 0, high = starts.length;
+    while (low < high) { const middle = (low + high) >>> 1; if (starts[middle]! <= index) low = middle + 1; else high = middle; }
+    return low;
+  };
+  const locations = new Map<string, TextLocation>(); let delta = 0;
+  for (const { proposal, originalStart } of ordered) {
+    const start = originalStart + delta;
+    const end = start + (proposal.status === 'accepted' ? proposal.after.length : proposal.before.length);
+    locations.set(proposal.id, { start, end, paragraph: 1 + countThrough(paragraphStarts, start), line: 1 + countThrough(lineStarts, start) });
+    if (proposal.status === 'accepted') delta += proposal.after.length - proposal.before.length;
+  }
+  return locations;
+}
+
 // Use original ranges plus accepted edit offsets, not a search for replacement
 // text: two accepted suggestions can legitimately produce identical text.
 export function suggestionLocation(draft: string, review: Review, id: string): TextLocation | null {
-  const proposal = review.suggestions.find(s => s.id === id);
-  if (!proposal || draft !== review.expected) return null;
-  try { if (composeReview(review) !== draft) return null; } catch { return null; }
-  const originalStart = review.original.indexOf(proposal.before);
-  let start = originalStart;
-  for (const other of review.suggestions) {
-    if (other.status === 'accepted' && review.original.indexOf(other.before) < originalStart) start += other.after.length - other.before.length;
-  }
-  const end = start + (proposal.status === 'accepted' ? proposal.after.length : proposal.before.length);
-  const prefix = draft.slice(0, start);
-  return { start, end, paragraph: 1 + (prefix.match(/\n[\t ]*\n+/g)?.length ?? 0), line: 1 + (prefix.match(/\n/g)?.length ?? 0) };
+  return suggestionLocations(draft, review).get(id) ?? null;
 }
 
 export function locationLabel(location: TextLocation | null): string {

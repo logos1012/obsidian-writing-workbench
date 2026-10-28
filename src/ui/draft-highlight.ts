@@ -13,13 +13,20 @@ function scroll(node: HTMLElement, top: number): void {
   if (node.scrollTo) node.scrollTo({ top: value, behavior: behavior(node) });
   else node.scrollTop = value;
 }
-function markedText(container: HTMLElement, text: string, location: TextLocation): HTMLElement {
-  const doc = container.ownerDocument;
+interface SegmentedText { before: Text; mark: HTMLElement; after: Text; source: 'editor' | 'preview' }
+function createSegments(container: HTMLElement, source: 'editor' | 'preview'): SegmentedText {
+  const doc = container.ownerDocument, before = doc.createTextNode(''), after = doc.createTextNode('');
   const mark = doc.createElement('mark'); mark.className = 'ww-draft-match';
-  mark.textContent = text.slice(location.start, location.end);
-  if (location.start === location.end) { mark.classList.add('is-deletion'); mark.textContent = '\u200b'; }
-  container.replaceChildren(doc.createTextNode(text.slice(0, location.start)), mark, doc.createTextNode(text.slice(location.end)));
-  return mark;
+  container.replaceChildren(before, mark, after);
+  return { before, mark, after, source };
+}
+function updateSegments(segments: SegmentedText, text: string, location: TextLocation): HTMLElement {
+  segments.before.data = text.slice(0, location.start);
+  segments.mark.textContent = text.slice(location.start, location.end);
+  segments.mark.classList.toggle('is-deletion', location.start === location.end);
+  if (location.start === location.end) segments.mark.textContent = '\u200b';
+  segments.after.data = text.slice(location.end) + (segments.source === 'editor' ? '\n' : '');
+  return segments.mark;
 }
 
 // A mirror behind the native textarea paints only the background. The native
@@ -29,35 +36,41 @@ export class EditorHighlight implements DraftHighlight {
   private content: HTMLDivElement;
   private observer?: ResizeObserver;
   private mark?: HTMLElement;
+  private segments: SegmentedText;
   private size?: { width: number; height: number };
+  private stylesReady = false;
+  private shouldReveal = false;
   private sync = () => { this.content.style.transform = `translate(${-this.editor.scrollLeft}px, ${-this.editor.scrollTop}px)`; };
   constructor(private editor: HTMLTextAreaElement, frame: HTMLElement) {
     this.layer = editor.ownerDocument.createElement('div'); this.layer.className = 'ww-draft-highlight'; this.layer.setAttribute('aria-hidden', 'true');
     this.content = editor.ownerDocument.createElement('div'); this.content.className = 'ww-draft-mirror'; this.layer.append(this.content); frame.prepend(this.layer);
+    this.segments = createSegments(this.content, 'editor');
     editor.addEventListener('scroll', this.sync, { passive: true });
     const Observer = editor.ownerDocument.defaultView?.ResizeObserver;
     if (Observer) {
       this.observer = new Observer(() => {
         const resized = this.size && (this.size.width !== editor.clientWidth || this.size.height !== editor.clientHeight);
-        this.measure();
-        if (resized && this.layer.classList.contains('is-active')) this.reveal();
+        this.measure(true);
+        if (resized && this.shouldReveal && this.layer.classList.contains('is-active')) this.reveal();
       });
       this.observer.observe(editor);
     }
   }
-  private measure(): void {
-    const style = this.editor.ownerDocument.defaultView!.getComputedStyle(this.editor);
-    for (const property of ['font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'line-height', 'letter-spacing', 'word-spacing', 'text-indent', 'text-transform', 'text-align', 'direction', 'tab-size', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'word-break', 'overflow-wrap']) {
-      this.content.style.setProperty(property, style.getPropertyValue(property));
+  private measure(refreshStyles = false): void {
+    if (!this.stylesReady || refreshStyles) {
+      const style = this.editor.ownerDocument.defaultView!.getComputedStyle(this.editor);
+      for (const property of ['font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'line-height', 'letter-spacing', 'word-spacing', 'text-indent', 'text-transform', 'text-align', 'direction', 'tab-size', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'word-break', 'overflow-wrap']) {
+        this.content.style.setProperty(property, style.getPropertyValue(property));
+      }
+      this.stylesReady = true;
     }
     this.layer.style.width = `${this.editor.clientWidth}px`;
     this.size = { width: this.editor.clientWidth, height: this.editor.clientHeight };
     this.sync();
   }
   show(location: TextLocation, reveal: boolean): void {
-    this.mark = markedText(this.content, this.editor.value, location);
-    // Match a textarea's final empty line without introducing visible text.
-    this.content.append(this.editor.ownerDocument.createTextNode('\n'));
+    this.shouldReveal = reveal;
+    this.mark = updateSegments(this.segments, this.editor.value, location);
     this.measure(); this.layer.classList.add('is-active');
     if (reveal) this.reveal();
   }
@@ -69,7 +82,7 @@ export class EditorHighlight implements DraftHighlight {
     }
   }
   clear(): void {
-    if (this.layer.classList.contains('is-active')) this.editor.scrollTo?.({ top: this.editor.scrollTop, behavior: 'auto' });
+    this.shouldReveal = false;
     this.layer.classList.remove('is-active');
   }
   destroy(): void { this.observer?.disconnect(); this.editor.removeEventListener('scroll', this.sync); this.layer.remove(); }
@@ -77,13 +90,21 @@ export class EditorHighlight implements DraftHighlight {
 
 export class PreviewHighlight implements DraftHighlight {
   private original: string;
-  constructor(private body: HTMLElement, private panel: HTMLElement) { this.original = body.textContent ?? ''; }
+  private segments: SegmentedText;
+  constructor(private body: HTMLElement, private panel: HTMLElement) {
+    this.original = body.textContent ?? ''; this.segments = createSegments(body, 'preview'); this.segments.before.data = this.original;
+  }
   show(location: TextLocation, reveal: boolean): void {
-    const mark = markedText(this.body, this.original, location);
+    const mark = updateSegments(this.segments, this.original, location);
     if (!reveal) return;
     const rect = mark.getBoundingClientRect(), viewport = this.panel.getBoundingClientRect();
     if (rect.top < viewport.top + 20 || rect.bottom > viewport.bottom - 20) scroll(this.panel, this.panel.scrollTop + rect.top - viewport.top - Math.max(20, (this.panel.clientHeight - Math.min(rect.height, this.panel.clientHeight)) / 2));
   }
-  clear(): void { this.body.textContent = this.original; }
+  clear(): void {
+    this.segments.before.data = this.original;
+    this.segments.mark.textContent = '';
+    this.segments.mark.classList.remove('is-deletion');
+    this.segments.after.data = '';
+  }
   destroy(): void { this.clear(); }
 }

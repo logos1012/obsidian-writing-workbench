@@ -46,7 +46,7 @@ describe('linked review interface', () => {
   it('highlights on hover without stealing editor focus, selection, or changing content, then clears on editing', async () => {
     vi.useFakeTimers(); const h = harness(); await h.ws.run('review', '검토', false); const { host } = mount(h);
     const editor = host.querySelector<HTMLTextAreaElement>('.ww-draft')!; editor.focus(); editor.setSelectionRange(2, 4);
-    host.querySelector('.ww-suggestion')!.dispatchEvent(new Event('pointerenter')); vi.advanceTimersByTime(130);
+    host.querySelector('.ww-suggestion')!.dispatchEvent(new Event('pointerenter')); vi.advanceTimersByTime(320);
     expect(host.querySelector('.ww-draft-highlight.is-active mark')?.textContent).toBe('효율이 좋아졌다.');
     expect(host.querySelector('.ww-suggestion-location')?.textContent).toBe('원고 1문단 · 1행');
     expect(document.activeElement).toBe(editor); expect([editor.selectionStart, editor.selectionEnd]).toEqual([2, 4]);
@@ -79,8 +79,8 @@ describe('linked review interface', () => {
     expect(host.querySelector('.ww-linkedin-body mark')?.textContent).toBe('효율이 좋아졌다.');
     expect(host.querySelector('.ww-linkedin-body')?.textContent).toBe(h.ws.project.draft);
     host.querySelector('.ww-suggestion')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(host.querySelector('.ww-linkedin-body mark')).toBeNull();
-    click('이력'); expect(host.querySelector('.ww-linkedin-body mark')).toBeNull();
+    expect(host.querySelector('.ww-linkedin-body mark')?.textContent).toBe('');
+    click('이력'); expect(host.querySelector('.ww-linkedin-body mark')?.textContent).toBe('');
   });
   it('does not flash when quickly crossing a card and clears pending timers when closed', async () => {
     vi.useFakeTimers(); const h = harness(); await h.ws.run('review', '검토', false); const { host, ui } = mount(h);

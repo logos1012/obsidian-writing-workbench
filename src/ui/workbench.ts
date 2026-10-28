@@ -5,7 +5,7 @@ import { ColumnResizer, defaultWidths, type ColumnWidths } from './layout';
 import { ViewState } from './view-state';
 import { linkedinPreview } from './linkedin-preview';
 import { EditorHighlight, PreviewHighlight, type DraftHighlight } from './draft-highlight';
-import { suggestionLocation, locationLabel } from './suggestion-location';
+import { suggestionLocations, type TextLocation, locationLabel } from './suggestion-location';
 import { outline } from './outline';
 
 export interface Actions {
@@ -37,6 +37,9 @@ export class WorkbenchUI {
   private linkTimer?: ReturnType<typeof setTimeout>;
   private restoring = false;
   private destroyed = false;
+  private positionCache?: { review: Review; draft: string; values: Map<string, TextLocation> };
+  private linkedCard?: HTMLElement;
+  private linkedRevealed = false;
   constructor(private host: HTMLElement, private workspace: Workspace, private actions: Actions) {
     this.input = workspace.project.composer;
     this.widths = [...(actions.columnWidths ?? defaultWidths)];
@@ -63,8 +66,9 @@ export class WorkbenchUI {
     this.status.classList.toggle('ww-error', Boolean(this.workspace.error));
     const review = this.workspace.project.reviews.find(r => r.id === this.reviewId) ?? this.workspace.project.reviews.at(-1);
     for (const button of this.host.querySelectorAll<HTMLButtonElement>('.ww-accept')) button.disabled = this.workspace.busy || (review ? review.expected !== this.workspace.project.draft : true);
+    const locations = review ? this.locations(review) : null;
     for (const button of this.host.querySelectorAll<HTMLButtonElement>('.ww-suggestion-location')) {
-      const location = review ? suggestionLocation(this.workspace.project.draft, review, button.dataset.suggestionId!) : null;
+      const location = locations?.get(button.dataset.suggestionId!) ?? null;
       button.textContent = locationLabel(location); button.disabled = this.workspace.busy || !location;
     }
   }
@@ -74,6 +78,7 @@ export class WorkbenchUI {
     this.viewState.capture(this.host, this.activeAnchor);
     this.restoring = true;
     this.highlight?.destroy(); this.highlight = undefined; this.draft = undefined;
+    this.linkedRevealed = false;
     if (this.tab !== 'review') this.clearLinked();
     this.resizer?.destroy();
     if (this.activityTimer) { clearInterval(this.activityTimer); this.activityTimer = undefined; }
@@ -305,23 +310,27 @@ export class WorkbenchUI {
         panel.append(item);
       }
       panel.append(element('h3', '', '문장별 제안'));
-      if (review.suggestions.length) panel.append(element('p', 'ww-hint', '제안에 마우스를 올리면 원고의 같은 구절이 강조됩니다. 위치를 누르거나 키보드로 선택해도 확인할 수 있어요.'));
+      if (review.suggestions.length) panel.append(element('p', 'ww-hint', '마우스를 올리면 원고 구절이 강조됩니다. 전체 원고에서 찾으려면 문단·행 위치를 누르세요. 키보드로 선택해도 찾아갈 수 있어요.'));
       if (!review.suggestions.length) panel.append(element('p', 'ww-hint', '이번 검토에는 문장 수정 제안이 없습니다.'));
       for (const suggestion of review.suggestions) {
         const card = element('article', 'ww-suggestion'); card.dataset.wwAnchor = suggestion.id;
         card.tabIndex = 0; card.dataset.wwFocus = `suggestion-${suggestion.id}`;
         const locate = this.button('', () => {
-          this.linkTo(review.id, suggestion.id, true);
+          this.linkTo(review.id, suggestion.id, true, true);
           const writing = this.host.querySelector<HTMLElement>('.ww-writing');
           if (this.host.clientWidth <= 800) writing?.scrollIntoView?.({ block: 'start', behavior: this.host.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
         }, 'ww-suggestion-location');
         locate.dataset.suggestionId = suggestion.id; locate.title = '원고에서 이 구절 보기';
         card.append(locate, markdown(suggestion.reason, 'ww-reason'));
+        let pointerFocus = false;
+        card.addEventListener('pointerdown', event => { pointerFocus = event.pointerType !== 'touch'; }, true);
+        card.addEventListener('pointerup', () => { pointerFocus = false; }, true);
+        card.addEventListener('pointercancel', () => { pointerFocus = false; }, true);
         card.addEventListener('pointerenter', event => { if (event.pointerType !== 'touch') this.linkTo(review.id, suggestion.id); });
         card.addEventListener('pointerleave', () => {
           if (!this.restoring && !card.contains(this.host.ownerDocument.activeElement)) this.clearLinkedSoon();
         });
-        card.addEventListener('focusin', () => this.linkTo(review.id, suggestion.id, true));
+        card.addEventListener('focusin', () => { const reveal = !pointerFocus; pointerFocus = false; this.linkTo(review.id, suggestion.id, true, reveal); });
         card.addEventListener('focusout', event => { if (!this.restoring && !card.contains(event.relatedTarget as Node | null)) this.clearLinkedSoon(); });
         card.addEventListener('keydown', event => { if (event.key === 'Escape') this.clearLinked(); });
         card.append(element('span', 'ww-diff-label', '원문'), element('del', 'ww-before', suggestion.before), element('span', 'ww-diff-label', '제안'), element('ins', 'ww-after', suggestion.after || '(삭제)'));
@@ -343,19 +352,37 @@ export class WorkbenchUI {
     }
     this.composer(panel, true);
   }
-  private linkTo(reviewId: string, suggestionId: string, immediate = false): void {
+  private locations(review: Review): Map<string, TextLocation> {
+    const draft = this.workspace.project.draft;
+    if (this.positionCache?.review === review && this.positionCache.draft === draft) return this.positionCache.values;
+    const values = suggestionLocations(draft, review);
+    this.positionCache = { review, draft, values };
+    return values;
+  }
+  private linkTo(reviewId: string, suggestionId: string, immediate = false, reveal = false): void {
     if (this.destroyed) return;
+    if (this.linked?.reviewId === reviewId && this.linked.suggestionId === suggestionId) {
+      if (this.linkTimer) clearTimeout(this.linkTimer);
+      this.linkTimer = undefined;
+      if (reveal && !this.linkedRevealed) this.showLinked(true);
+      return;
+    }
     if (this.linkTimer) clearTimeout(this.linkTimer);
-    const show = () => { this.linkTimer = undefined; this.linked = { reviewId, suggestionId }; this.showLinked(!this.restoring); };
-    if (immediate) show(); else this.linkTimer = setTimeout(show, 120);
+    const show = () => { this.linkTimer = undefined; this.linked = { reviewId, suggestionId }; this.showLinked(reveal && !this.restoring); };
+    if (immediate) show(); else this.linkTimer = setTimeout(show, 300);
   }
   private showLinked(reveal: boolean): void {
     if (!this.linked) return;
     const review = this.workspace.project.reviews.find(r => r.id === this.linked!.reviewId);
-    const location = review ? suggestionLocation(this.workspace.project.draft, review, this.linked.suggestionId) : null;
+    const location = review ? this.locations(review).get(this.linked.suggestionId) : null;
     if (!location || this.tab !== 'review') { this.clearLinked(); return; }
-    for (const card of this.host.querySelectorAll<HTMLElement>('.ww-suggestion')) card.classList.toggle('is-linked', card.dataset.wwAnchor === this.linked.suggestionId);
-    this.highlight?.show(location, reveal);
+    if (!this.linkedCard?.isConnected || this.linkedCard.dataset.wwAnchor !== this.linked.suggestionId) {
+      this.linkedCard?.classList.remove('is-linked');
+      this.linkedCard = [...this.host.querySelectorAll<HTMLElement>('.ww-suggestion')].find(card => card.dataset.wwAnchor === this.linked!.suggestionId);
+    }
+    this.linkedCard?.classList.add('is-linked');
+    if (reveal && !this.linkedRevealed) { this.highlight?.show(location, true); this.linkedRevealed = true; }
+    else if (!this.linkedRevealed) this.highlight?.show(location, false);
   }
   private clearLinkedSoon(): void {
     if (this.destroyed) return;
@@ -365,7 +392,8 @@ export class WorkbenchUI {
   private clearLinked(): void {
     if (this.linkTimer) clearTimeout(this.linkTimer);
     this.linkTimer = undefined; this.linked = undefined; this.highlight?.clear();
-    for (const card of this.host.querySelectorAll('.ww-suggestion.is-linked')) card.classList.remove('is-linked');
+    this.linkedRevealed = false;
+    this.linkedCard?.classList.remove('is-linked'); this.linkedCard = undefined;
   }
   private source(parent: HTMLElement, source: Review['sources'][number]): void {
     const container = element('div', 'ww-source');
