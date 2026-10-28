@@ -1,9 +1,9 @@
 {
   "id": "writing-workbench",
   "name": "글결",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "minAppVersion": "1.8.0",
-  "description": "내 생각으로 쓰고, AI와 검토하는 LinkedIn 글쓰기 작업실.",
+  "description": "내 생각으로 쓰고, AI와 검토하는 글쓰기 작업실.",
   "author": "Jake",
   "isDesktopOnly": true
 }

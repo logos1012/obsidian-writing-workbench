@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_DRAFT_FOLDER } from '../storage/draft-folder';
+import { WritingModeSchema, type WritingMode } from './writing-mode';
 
 export const ProviderSchema = z.enum(['claude', 'codex']);
 export type Provider = z.infer<typeof ProviderSchema>;
@@ -33,7 +33,9 @@ export type AgentReply = z.infer<typeof AgentReplySchema>;
 export const replyJsonSchema = z.toJSONSchema(AgentReplySchema, { target: 'draft-7' });
 
 export const SettingsSchema = z.object({
-  draftFolder: z.string().default(DEFAULT_DRAFT_FOLDER),
+  draftFolder: z.string().default(''),
+  draftFolders: z.array(z.string()).default([]),
+  defaultMode: WritingModeSchema.default('linkedin'),
   claudePath: z.string().default(''), codexPath: z.string().default(''),
   claudeModel: z.string().default(''), codexModel: z.string().default(''),
   timeoutSeconds: z.number().int().min(30).max(1800).default(300),
@@ -69,18 +71,19 @@ const RevisionSchema = z.object({
 }).strict();
 export const ProjectSchema = z.object({
   version: z.literal(1), id: z.string(), path: z.string(), provider: ProviderSchema,
+  writingMode: WritingModeSchema.default('linkedin'),
   base: z.string(), draft: z.string(), memo: z.array(MemoSchema),
   materials: z.string(), composer: z.string().default(''), messages: z.array(MessageSchema), reviews: z.array(ReviewSchema),
   revisions: z.array(RevisionSchema),
-  pendingWrite: z.object({ before: z.string(), after: z.string(), createdAt: z.string() }).strict().nullable(),
+  pendingWrite: z.object({ before: z.string(), after: z.string(), createdAt: z.string(), targetPath: z.string().optional() }).strict().nullable(),
   createdAt: z.string(), updatedAt: z.string(),
 }).strict();
 export type Project = z.infer<typeof ProjectSchema>;
 export const id = () => globalThis.crypto.randomUUID();
 export const now = () => new Date().toISOString();
-export function createProject(path: string, text: string): Project {
+export function createProject(path: string, text: string, writingMode: WritingMode = 'linkedin'): Project {
   return {
-    version: 1, id: id(), path, provider: 'claude', base: text, draft: text,
+    version: 1, id: id(), path, writingMode, provider: 'claude', base: text, draft: text,
     memo: memoKeys.map(key => ({ key, text: '' })), materials: '', composer: '', messages: [], reviews: [],
     revisions: [{ id: id(), createdAt: now(), label: '연결한 원고', text }], pendingWrite: null,
     createdAt: now(), updatedAt: now(),

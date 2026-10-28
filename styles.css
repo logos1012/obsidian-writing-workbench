@@ -179,3 +179,9 @@
 .ww-folder-status.is-error { color: var(--text-error); }
 @container (max-width: 800px) { .ww-columns { display: flex; flex-direction: column; overflow: visible; flex: none; } .ww-panel { overflow: visible; padding: 16px; } .ww-divider { display: none; } .ww-side, .ww-writing { border-top: 1px solid var(--background-modifier-border); } .ww-toolbar { padding: 14px; } .ww-statusbar { padding: 8px 14px; flex-wrap: wrap; } .ww-activity { padding: 12px 14px; flex-wrap: wrap; } }
 @media (prefers-reduced-motion: reduce) { .ww-root * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+
+.ww-mode-description { color: var(--text-muted); font-size: 12px; line-height: 1.7; margin: 4px 0 20px; }
+.ww-prose-preview { max-width: 680px; margin: 16px auto; padding: 28px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); border-radius: 8px; }
+.ww-prose-preview.is-mobile { max-width: 360px; padding: 20px; }
+.ww-preview-label { font-size: 11px; color: var(--text-muted); margin: 0 0 24px; }
+.ww-prose-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; font-size: 16px; }

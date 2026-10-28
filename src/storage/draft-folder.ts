@@ -55,3 +55,17 @@ export async function createDraft<T>(vault: DraftVault<T>, input: string, config
   }
   throw new Error('같은 이름의 원고가 너무 많습니다. 잠시 후 다시 시도해 주세요.');
 }
+
+export function draftPath(folder: string, filename: string, configDir: string, kind: (path: string) => EntryKind): string {
+  const directory = checkDraftFolder(folder, configDir, kind);
+  const name = filename.trim().replace(/\.md$/i, '');
+  if (!name || name.startsWith('.') || /[<>:"|?*\\/\u0000-\u001f\u007f]/.test(name) || name.endsWith('.')) throw new Error('파일명에 사용할 수 없는 문자가 있습니다. 경로는 폴더 항목에서 선택하세요.');
+  return `${directory ? directory + '/' : ''}${name}.md`;
+}
+
+export async function ensureDraftFolder<T>(vault: DraftVault<T>, folder: string, configDir: string): Promise<void> {
+  for (const parent of ancestors(checkDraftFolder(folder, configDir, path => vault.kind(path)))) {
+    if (vault.kind(parent) === 'folder') continue;
+    try { await vault.createFolder(parent); } catch (error) { if (vault.kind(parent) !== 'folder') throw error; }
+  }
+}

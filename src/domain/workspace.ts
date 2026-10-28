@@ -1,11 +1,14 @@
 import { AgentReplySchema, id, now, type Preferences, type Project, type Provider, type Settings } from './model';
 import { acceptSuggestion, undoSuggestion, ConflictError, validateSuggestions } from './review';
 import { buildPrompt, type Task } from './prompt';
+import type { WritingMode } from './writing-mode';
 import type { Agent } from '../providers/cli';
 
 export interface Store<T> { save(value: T): Promise<void> }
 export interface DocumentPort {
   read(path: string): Promise<string>;
+  create?(path: string, text: string): Promise<void>;
+  exists?(path: string): boolean;
   compareAndSwap(path: string, expected: string, next: string): Promise<void>;
 }
 export interface RequestActivity {
@@ -50,6 +53,13 @@ export class Workspace {
     if (this.busy) return;
     this.project.provider = provider;
     await this.persist(); this.onChange();
+  }
+  async chooseMode(mode: WritingMode): Promise<void> {
+    await this.operation(async () => {
+      const previous = this.project.writingMode; this.project.writingMode = mode;
+      try { await this.persist(); } catch (error) { this.project.writingMode = previous; throw error; }
+      this.status = '글쓰기 모드를 변경했습니다. 다음 AI 요청부터 적용됩니다. 기존 메모와 검토는 유지됩니다.';
+    });
   }
   cancel(): void {
     if (this.activity) this.activity.phase = 'cancelling';
@@ -147,9 +157,21 @@ export class Workspace {
     const last = this.project.revisions.at(-1);
     if (last?.text !== this.project.draft) this.project.revisions.push({ id: id(), createdAt: now(), label, text: this.project.draft });
   }
-  async saveDocument(): Promise<void> {
+  async saveDocument(targetPath = this.project.path): Promise<void> {
     await this.operation(async () => {
       if (this.project.pendingWrite) await this.recoverWrite();
+      if (!targetPath) throw new Error('원고를 저장할 폴더와 파일명을 선택해 주세요.');
+      if (targetPath !== this.project.path) {
+        if (!this.documents.create) throw new Error('새 파일 저장을 사용할 수 없습니다.');
+        if (this.documents.exists?.(targetPath)) throw new Error('같은 이름의 파일이 있습니다. 다른 파일명을 선택해 주세요.');
+        const after = this.project.draft;
+        this.project.pendingWrite = { before: '', after, targetPath, createdAt: now() };
+        await this.persist();
+        try { await this.documents.create(targetPath, after); }
+        catch (error) { this.project.pendingWrite = null; await this.persist(); throw error; }
+        this.project.path = targetPath; this.project.base = after; this.project.pendingWrite = null;
+        this.snapshot('새 경로에 원고 저장'); await this.persist(); this.status = `원고를 저장했습니다: ${targetPath}`; return;
+      }
       if (this.project.draft === this.project.base) { this.status = '원고 파일과 작업 사본이 같습니다'; return; }
       const before = this.project.base, after = this.project.draft;
       this.project.pendingWrite = { before, after, createdAt: now() };
@@ -165,8 +187,10 @@ export class Workspace {
   async recoverWrite(): Promise<void> {
     const pending = this.project.pendingWrite;
     if (!pending) return;
-    const text = await this.documents.read(this.project.path);
+    if (pending.targetPath && this.documents.exists && !this.documents.exists(pending.targetPath)) { this.project.pendingWrite = null; await this.persist(); return; }
+    const text = await this.documents.read(pending.targetPath ?? this.project.path);
     if (text === pending.after) {
+      if (pending.targetPath) this.project.path = pending.targetPath;
       this.project.base = text; this.project.pendingWrite = null;
       this.snapshot('중단된 저장 복구'); await this.persist();
     } else if (text === pending.before) { this.project.pendingWrite = null; await this.persist(); }

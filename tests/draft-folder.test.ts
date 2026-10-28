@@ -21,7 +21,7 @@ describe('configurable draft folder', () => {
     expect(initialDraftFolder('', true)).toBe('');
   });
   it('keeps old CLI settings while supplying the new field, and persists an explicitly empty root setting', () => {
-    expect(SettingsSchema.parse({ claudePath: '/custom/claude', timeoutSeconds: 600 })).toMatchObject({ claudePath: '/custom/claude', timeoutSeconds: 600, draftFolder: '글쓰기' });
+    expect(SettingsSchema.parse({ claudePath: '/custom/claude', timeoutSeconds: 600 })).toMatchObject({ claudePath: '/custom/claude', timeoutSeconds: 600, draftFolder: '', draftFolders: [], defaultMode: 'linkedin' });
     expect(SettingsSchema.parse({ draftFolder: '' }).draftFolder).toBe('');
   });
   it('accepts Korean and nested paths and normalizes separator repetition and outer spaces', () => {

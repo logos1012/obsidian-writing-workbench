@@ -8,8 +8,9 @@ import { ConflictError } from './domain/review';
 import { CliAgent, resolveExecutable } from './providers/cli';
 import { WorkbenchUI, element } from './ui/workbench';
 import { LayoutSchema, defaultWidths, type ColumnWidths } from './ui/layout';
-import { checkDraftFolder, createDraft, initialDraftFolder, LEGACY_DRAFT_FOLDER } from './storage/draft-folder';
-import { renderFolderSetting } from './ui/folder-setting';
+import { checkDraftFolder } from './storage/draft-folder';
+import { writingModes, type WritingMode } from './domain/writing-mode';
+import { draftPath, ensureDraftFolder } from './storage/draft-folder';
 
 const VIEW = 'writing-workbench';
 export default class WritingWorkbenchPlugin extends Plugin {
@@ -29,7 +30,7 @@ export default class WritingWorkbenchPlugin extends Plugin {
     const parsed = SettingsSchema.safeParse(stored ?? {});
     this.settings = parsed.success ? parsed.data : { ...defaultSettings };
     if (parsed.success) {
-      this.settings.draftFolder = initialDraftFolder(stored?.draftFolder, this.app.vault.getAbstractFileByPath(LEGACY_DRAFT_FOLDER) instanceof TFolder);
+      this.settings.draftFolders = stored?.draftFolders ?? (stored?.draftFolder !== undefined ? [stored.draftFolder] : []);
     }
     if (!parsed.success) new Notice(`${this.manifest.name} 설정 형식이 달라 기본 설정으로 시작합니다. 저장된 작업은 유지됩니다.`);
     this.preferenceStore = new JsonStore(join(this.stateRoot, 'preferences.json'), PreferencesSchema);
@@ -57,7 +58,7 @@ export default class WritingWorkbenchPlugin extends Plugin {
   onunload(): void { this.workspace?.cancel(); void this.workspace?.flush().catch(error => this.notice(error)); }
   private notice(error: unknown): void { new Notice(error instanceof Error ? error.message : '작업에 실패했습니다.', 8000); }
   async updateSettings(): Promise<void> { await this.saveData(SettingsSchema.parse(this.settings)); }
-  private entryKind(path: string): 'folder' | 'file' | undefined {
+  entryKind(path: string): 'folder' | 'file' | undefined {
     const entry = this.app.vault.getAbstractFileByPath(path);
     return entry instanceof TFolder ? 'folder' : entry ? 'file' : undefined;
   }
@@ -89,6 +90,12 @@ export default class WritingWorkbenchPlugin extends Plugin {
     };
     return {
       read: path => this.app.vault.read(fileAt(path)),
+      exists: path => Boolean(this.app.vault.getAbstractFileByPath(path)),
+      create: async (path, text) => {
+        const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+        await ensureDraftFolder({ kind: p => this.entryKind(p), createFolder: p => this.app.vault.createFolder(p), createNote: p => this.app.vault.create(p, '') }, folder, this.app.vault.configDir);
+        await this.app.vault.create(path, text);
+      },
       compareAndSwap: async (path, expected, next) => {
         await this.app.vault.process(fileAt(path), current => {
           if (current !== expected) throw new ConflictError('다른 창이나 앱에서 원고가 바뀌었습니다. 덮어쓰지 않았습니다. 파일에서 다시 불러오면 현재 작업 사본은 이력에 남습니다.');
@@ -113,7 +120,7 @@ export default class WritingWorkbenchPlugin extends Plugin {
         if (data?.path === file.path) { project = data; store = candidate; break; }
       }
       if (!project) {
-        project = createProject(file.path, await this.app.vault.read(file));
+        project = createProject(file.path, await this.app.vault.read(file), this.settings.defaultMode);
         store = new JsonStore(join(this.stateRoot, 'projects', `${project.id}.json`), ProjectSchema);
         await store.save(project);
       }
@@ -127,7 +134,7 @@ export default class WritingWorkbenchPlugin extends Plugin {
     if (project.pendingWrite) {
       try { await this.workspace.recoverWrite(); } catch (error) { this.workspace.error = error instanceof Error ? error.message : '저장 복구 확인이 필요합니다.'; }
     }
-    if (!(this.app.vault.getAbstractFileByPath(project.path) instanceof TFile)) this.workspace.error = '연결된 원고 파일이 없습니다. 작업 사본은 복원했습니다. 원고를 복사해서 새 노트에 보존할 수 있습니다.';
+    if (project.path && !(this.app.vault.getAbstractFileByPath(project.path) instanceof TFile)) this.workspace.error = '연결된 원고 파일이 없습니다. 작업 사본은 복원했습니다. 원고를 복사해서 새 노트에 보존할 수 있습니다.';
     await new JsonStore(join(this.stateRoot, 'last-project.json'), ProjectSchema.pick({ id: true })).save({ id: project.id });
     await this.activate(false);
   }
@@ -175,15 +182,13 @@ export default class WritingWorkbenchPlugin extends Plugin {
     this.creating = true;
     try {
       await this.workspace?.flush();
-      const file = await createDraft({
-        kind: path => this.entryKind(path),
-        createFolder: path => this.app.vault.createFolder(path),
-        createNote: path => this.app.vault.create(path, ''),
-      }, this.settings.draftFolder, this.app.vault.configDir);
-      this.creating = false;
-      await this.openFile(file);
+      const project = createProject('', '', this.settings.defaultMode);
+      const store = new JsonStore(join(this.stateRoot, 'projects', `${project.id}.json`), ProjectSchema);
+      await store.save(project);
+      await this.bindProject(project, store);
     } finally { this.creating = false; }
   }
+  saveManuscript(): void { if (this.workspace && !this.workspace.busy) new SaveManuscriptModal(this, this.workspace).open(); }
   pickFile(material = false): void {
     new NotePicker(this, file => {
       void (async () => {
@@ -211,7 +216,7 @@ class FolderPicker extends FuzzySuggestModal<string> {
 class SavedProjectPicker extends FuzzySuggestModal<Project> {
   constructor(private plugin: WritingWorkbenchPlugin, private projects: Project[]) { super(plugin.app); this.setPlaceholder('이전에 작업한 글을 찾아 복원하세요'); }
   getItems(): Project[] { return this.projects; }
-  getItemText(project: Project): string { return `${project.path} (${new Date(project.updatedAt).toLocaleDateString('ko-KR')})`; }
+  getItemText(project: Project): string { return `${project.path || '저장 전 원고'} · ${writingModes[project.writingMode].label} (${new Date(project.updatedAt).toLocaleDateString('ko-KR')})`; }
   onChooseItem(project: Project): void { void this.plugin.openSavedProject(project.id).catch(error => new Notice(String(error), 8000)); }
 }
 class NotePicker extends FuzzySuggestModal<TFile> {
@@ -236,6 +241,7 @@ class WorkbenchView extends ItemView {
         newProject: () => { void this.plugin.newProject().catch(error => new Notice(String(error))); },
         openProject: () => this.plugin.pickFile(), addMaterial: () => this.plugin.pickFile(true), settings: () => this.plugin.openSettings(),
         recoverProject: () => { void this.plugin.pickSavedProject().catch(error => new Notice(String(error))); },
+        saveDocument: () => this.plugin.saveManuscript(),
         columnWidths: this.plugin.columnWidths, saveColumnWidths: widths => this.plugin.saveColumnWidths(widths),
       });
     } else {
@@ -254,7 +260,22 @@ class WorkbenchSettings extends PluginSettingTab {
   }
   renderInto(container: HTMLElement): void {
     container.replaceChildren(); container.append(element('h2', '', this.plugin.manifest.name));
-    renderFolderSetting(container, { value: this.plugin.settings.draftFolder, choose: select => this.plugin.pickDraftFolder(select), save: path => this.plugin.saveDraftFolder(path) });
+    new Setting(container).setName('새 글의 기본 모드').setDesc('글마다 상단에서 변경할 수 있습니다.').addDropdown(select => {
+      for (const [key, mode] of Object.entries(writingModes)) select.addOption(key, mode.label);
+      select.setValue(this.plugin.settings.defaultMode).onChange(async value => { this.plugin.settings.defaultMode = value as WritingMode; await this.plugin.updateSettings(); });
+    });
+    container.append(element('h3', '', '자주 쓰는 저장 폴더'), element('p', 'ww-hint', '새 글은 파일 없이 시작합니다. 원고 저장에서 폴더와 파일명을 선택하세요. 폴더 등록만으로 파일이나 폴더가 만들어지지 않습니다.'));
+    for (const path of this.plugin.settings.draftFolders) {
+      new Setting(container).setName(path || '볼트 최상위').addButton(button => button.setButtonText('목록에서 제거').onClick(async () => {
+        this.plugin.settings.draftFolders = this.plugin.settings.draftFolders.filter(p => p !== path);
+        await this.plugin.updateSettings(); this.renderInto(container);
+      }));
+    }
+    new Setting(container).setName('저장 폴더 추가').addButton(button => button.setButtonText('폴더 선택').onClick(() => this.plugin.pickDraftFolder(path => {
+      if (!this.plugin.settings.draftFolders.includes(path)) this.plugin.settings.draftFolders.push(path);
+      void this.plugin.updateSettings().then(() => this.renderInto(container)).catch(error => new Notice(String(error)));
+    })));
+
     container.append(element('p', '', '맥에 설치하고 로그인한 CLI를 사용합니다. 선택한 원고·대화·참고 자료는 해당 AI 제공자에게 전달됩니다.'));
     for (const provider of ['claude', 'codex'] as const) {
       const pathKey = `${provider}Path` as const, modelKey = `${provider}Model` as const;
@@ -266,6 +287,51 @@ class WorkbenchSettings extends PluginSettingTab {
     }
     new Setting(container).setName('응답 제한 시간').setDesc('30~1,800초. 기본 300초.').addText(text => text.setValue(String(this.plugin.settings.timeoutSeconds)).onChange(async value => {
       const seconds = Number(value); if (Number.isInteger(seconds) && seconds >= 30 && seconds <= 1800) { this.plugin.settings.timeoutSeconds = seconds; await this.plugin.updateSettings(); }
+    }));
+  }
+}
+
+class SaveManuscriptModal extends Modal {
+  constructor(private plugin: WritingWorkbenchPlugin, private workspace: Workspace) { super(plugin.app); }
+  onOpen(): void {
+    this.titleEl.setText('원고 저장');
+    const current = this.workspace.project.path;
+    let folder = current.includes('/') ? current.slice(0, current.lastIndexOf('/')) : current ? '' : this.plugin.settings.draftFolder;
+    let name = current.split('/').at(-1)?.replace(/\.md$/i, '') || `새 글 ${new Date().toLocaleDateString('sv-SE')}`;
+    const choices = [...new Set([folder, ...this.plugin.settings.draftFolders])];
+    let folderSelect: HTMLSelectElement;
+    new Setting(this.contentEl).setName('저장 폴더').addDropdown(dropdown => {
+      folderSelect = dropdown.selectEl;
+      for (const path of choices) dropdown.addOption(path, path || '볼트 최상위');
+      dropdown.setValue(folder).onChange(value => { folder = value; update(); });
+    }).addButton(button => button.setButtonText('다른 폴더 선택').onClick(() => this.plugin.pickDraftFolder(path => {
+      folder = path;
+      if (![...folderSelect.options].some(option => option.value === path)) folderSelect.add(new Option(path || '볼트 최상위', path));
+      folderSelect.value = path; update();
+    })));
+    new Setting(this.contentEl).setName('파일명').setDesc('확장자 .md는 자동으로 붙습니다.').addText(text => text.setValue(name).onChange(value => { name = value; update(); }));
+    let remember = true;
+    new Setting(this.contentEl).setName('이 폴더를 저장 목록에 기억').addToggle(toggle => toggle.setValue(true).onChange(value => { remember = value; }));
+    const status = element('p', 'ww-hint'); status.setAttribute('role', 'status'); this.contentEl.append(status);
+    const update = () => {
+      try { const path = draftPath(folder, name, this.app.vault.configDir, p => this.plugin.entryKind(p)); status.textContent = path === current ? `${path}에 변경 내용을 저장합니다.` : `${path}에 새 파일을 만듭니다.${current ? ' 기존 원고 파일은 유지됩니다.' : ''}`; }
+      catch (error) { status.textContent = String(error); }
+    };
+    update();
+    new Setting(this.contentEl).addButton(button => button.setButtonText('취소').onClick(() => this.close())).addButton(button => button.setButtonText('저장').setCta().onClick(async () => {
+      button.setDisabled(true);
+      try {
+        const path = draftPath(folder, name, this.app.vault.configDir, p => this.plugin.entryKind(p));
+        if (this.plugin.workspace !== this.workspace) throw new Error('작업이 변경됐습니다. 저장 창을 다시 열어 주세요.');
+        await this.workspace.saveDocument(path);
+        if (remember) {
+          if (!this.plugin.settings.draftFolders.includes(folder)) this.plugin.settings.draftFolders.push(folder);
+          this.plugin.settings.draftFolder = folder;
+          try { await this.plugin.updateSettings(); } catch { new Notice('원고는 저장했지만 폴더 설정을 기억하지 못했습니다.'); }
+        }
+        this.close();
+      } catch (error) { status.textContent = error instanceof Error ? error.message : String(error); status.classList.add('ww-error'); }
+      finally { button.setDisabled(false); }
     }));
   }
 }
