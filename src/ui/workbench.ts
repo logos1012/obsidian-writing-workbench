@@ -4,6 +4,9 @@ import { markdown } from './markdown';
 import { ColumnResizer, defaultWidths, type ColumnWidths } from './layout';
 import { ViewState } from './view-state';
 import { linkedinPreview } from './linkedin-preview';
+import { EditorHighlight, PreviewHighlight, type DraftHighlight } from './draft-highlight';
+import { suggestionLocation, locationLabel } from './suggestion-location';
+import { outline } from './outline';
 
 export interface Actions {
   newProject(): void; openProject(): void; addMaterial(): void; settings(): void; recoverProject?(): void;
@@ -29,12 +32,17 @@ export class WorkbenchUI {
   private widths: ColumnWidths;
   private memoEdits = new Map<string, string>();
   private activityTimer?: ReturnType<typeof setInterval>;
+  private highlight?: DraftHighlight;
+  private linked?: { reviewId: string; suggestionId: string };
+  private linkTimer?: ReturnType<typeof setTimeout>;
+  private restoring = false;
+  private destroyed = false;
   constructor(private host: HTMLElement, private workspace: Workspace, private actions: Actions) {
     this.input = workspace.project.composer;
     this.widths = [...(actions.columnWidths ?? defaultWidths)];
     workspace.onChange = () => this.render(); this.render();
   }
-  destroy(): void { this.resizer?.destroy(); if (this.activityTimer) clearInterval(this.activityTimer); this.workspace.onChange = () => undefined; this.host.replaceChildren(); }
+  destroy(): void { this.destroyed = true; this.resizer?.destroy(); this.clearLinked(); this.highlight?.destroy(); if (this.activityTimer) clearInterval(this.activityTimer); this.workspace.onChange = () => undefined; this.host.replaceChildren(); }
   private button(text: string, callback: () => void | Promise<void>, className = ''): HTMLButtonElement {
     const button = element('button', className, text); button.type = 'button';
     button.disabled = this.workspace.busy;
@@ -55,10 +63,18 @@ export class WorkbenchUI {
     this.status.classList.toggle('ww-error', Boolean(this.workspace.error));
     const review = this.workspace.project.reviews.find(r => r.id === this.reviewId) ?? this.workspace.project.reviews.at(-1);
     for (const button of this.host.querySelectorAll<HTMLButtonElement>('.ww-accept')) button.disabled = this.workspace.busy || (review ? review.expected !== this.workspace.project.draft : true);
+    for (const button of this.host.querySelectorAll<HTMLButtonElement>('.ww-suggestion-location')) {
+      const location = review ? suggestionLocation(this.workspace.project.draft, review, button.dataset.suggestionId!) : null;
+      button.textContent = locationLabel(location); button.disabled = this.workspace.busy || !location;
+    }
   }
   render(): void {
+    if (this.destroyed) return;
     const ws = this.workspace, p = ws.project;
     this.viewState.capture(this.host, this.activeAnchor);
+    this.restoring = true;
+    this.highlight?.destroy(); this.highlight = undefined; this.draft = undefined;
+    if (this.tab !== 'review') this.clearLinked();
     this.resizer?.destroy();
     if (this.activityTimer) { clearInterval(this.activityTimer); this.activityTimer = undefined; }
     this.host.replaceChildren(); this.host.classList.add('ww-root');
@@ -85,8 +101,10 @@ export class WorkbenchUI {
       if (save) void this.actions.saveColumnWidths?.([...widths]).catch(error => this.showError(error));
     });
     columns.append(this.renderMemo(), this.resizer.separator(0), this.renderDraft(), this.resizer.separator(1), this.renderSide()); this.host.append(columns);
-    this.viewState.restore(this.host);
+    this.restoring = true;
+    try { this.viewState.restore(this.host); } finally { this.restoring = false; }
     this.refreshStatus();
+    this.showLinked(false);
   }
   private renderActivity(): HTMLElement {
     const activity = this.workspace.activity!;
@@ -125,7 +143,7 @@ export class WorkbenchUI {
         };
         section.addEventListener('dblclick', event => { if (!(event.target as Element).closest('a,button')) edit(); });
         section.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === section && !event.isComposing) { event.preventDefault(); edit(); } });
-        section.append(heading, text.trim() ? markdown(text, 'ww-memo-content') : element('p', 'ww-memo-empty', key === '관점' ? '어떤 이야기를 전하고 싶은가요?' : '글감을 찾는 대화에서 여기에 정리됩니다.'));
+        section.append(heading, text.trim() ? (key === '개요' ? outline(text) : markdown(text, 'ww-memo-content')) : element('p', 'ww-memo-empty', key === '관점' ? '어떤 이야기를 전하고 싶은가요?' : '글감을 찾는 대화에서 여기에 정리됩니다.'));
       } else {
         const area = element('textarea', 'ww-memo-input'); area.rows = key === '개요' ? 8 : 5;
         area.value = this.memoEdits.get(key)!; area.disabled = ws.busy; area.setAttribute('aria-label', `${key} 편집`); area.dataset.wwFocus = `memo-edit-${key}`; area.dataset.wwScroll = `memo-editor-${key}`;
@@ -181,16 +199,22 @@ export class WorkbenchUI {
       this.draft.placeholder = '첫 문장을 적어 보세요.\n\n아직 주제가 없다면 오른쪽의 글감 찾기에서 대화를 시작해도 좋아요.';
       this.draft.value = ws.project.draft; this.draft.disabled = ws.busy;
       this.draft.addEventListener('input', () => {
+        this.clearLinked();
         const value = this.draft?.value ?? ''; count.textContent = `${Array.from(value).length.toLocaleString()}자`;
         void ws.edit({ draft: value }).then(() => this.refreshStatus()).catch(error => this.showError(error));
-      }); panel.append(this.draft);
+      });
+      this.draft.addEventListener('focus', () => { if (!this.restoring) this.clearLinked(); });
+      const frame = element('div', 'ww-draft-frame'); frame.append(this.draft); panel.append(frame);
+      this.highlight = new EditorHighlight(this.draft, frame);
     } else {
       const controls = element('div', 'ww-preview-controls');
       for (const [mobile, label] of [[false, '데스크톱'], [true, '모바일']] as const) {
         const control = this.button(label, () => { this.mobile = mobile; this.render(); }, this.mobile === mobile ? 'is-active' : '');
         control.setAttribute('aria-pressed', String(this.mobile === mobile)); controls.append(control);
       }
-      panel.append(controls, element('p', 'ww-hint', 'LinkedIn 밝은 피드 화면을 참고한 미리보기입니다. 실제 게시 화면과 줄바꿈·접힘 위치는 다를 수 있어요.'), linkedinPreview(ws.project.draft, this.mobile));
+      const preview = linkedinPreview(ws.project.draft, this.mobile);
+      panel.append(controls, element('p', 'ww-hint', 'LinkedIn 밝은 피드 화면을 참고한 미리보기입니다. 실제 게시 화면과 줄바꿈·접힘 위치는 다를 수 있어요.'), preview);
+      this.highlight = new PreviewHighlight(preview.querySelector<HTMLElement>('.ww-linkedin-body')!, panel);
       panel.append(this.button('원고 복사', async () => { await navigator.clipboard.writeText(ws.project.draft); ws.status = '원고를 복사했습니다'; this.refreshStatus(); }));
     }
     return panel;
@@ -271,7 +295,7 @@ export class WorkbenchUI {
     else {
       const select = element('select'); select.setAttribute('aria-label', '검토 기록 선택');
       for (const item of [...reviews].reverse()) { const option = element('option', '', `${providerName(item.provider)} · ${time(item.createdAt)}`); option.value = item.id; option.selected = item.id === review.id; select.append(option); }
-      select.addEventListener('change', () => { this.reviewId = select.value; this.render(); }); panel.append(select);
+      select.addEventListener('change', () => { this.clearLinked(); this.reviewId = select.value; this.render(); }); panel.append(select);
       if (review.original !== ws.project.draft) panel.append(element('p', 'ww-warning', '이 진단은 이전 원고 기준입니다. 현재 원고의 평가가 필요하면 다시 검토하세요.'));
       panel.append(element('h3', '', '전체 진단'), markdown(review.message, 'ww-review-summary'));
       for (const finding of review.diagnosis) {
@@ -281,9 +305,25 @@ export class WorkbenchUI {
         panel.append(item);
       }
       panel.append(element('h3', '', '문장별 제안'));
+      if (review.suggestions.length) panel.append(element('p', 'ww-hint', '제안에 마우스를 올리면 원고의 같은 구절이 강조됩니다. 위치를 누르거나 키보드로 선택해도 확인할 수 있어요.'));
       if (!review.suggestions.length) panel.append(element('p', 'ww-hint', '이번 검토에는 문장 수정 제안이 없습니다.'));
       for (const suggestion of review.suggestions) {
-        const card = element('article', 'ww-suggestion'); card.dataset.wwAnchor = suggestion.id; card.append(markdown(suggestion.reason, 'ww-reason'));
+        const card = element('article', 'ww-suggestion'); card.dataset.wwAnchor = suggestion.id;
+        card.tabIndex = 0; card.dataset.wwFocus = `suggestion-${suggestion.id}`;
+        const locate = this.button('', () => {
+          this.linkTo(review.id, suggestion.id, true);
+          const writing = this.host.querySelector<HTMLElement>('.ww-writing');
+          if (this.host.clientWidth <= 800) writing?.scrollIntoView?.({ block: 'start', behavior: this.host.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+        }, 'ww-suggestion-location');
+        locate.dataset.suggestionId = suggestion.id; locate.title = '원고에서 이 구절 보기';
+        card.append(locate, markdown(suggestion.reason, 'ww-reason'));
+        card.addEventListener('pointerenter', event => { if (event.pointerType !== 'touch') this.linkTo(review.id, suggestion.id); });
+        card.addEventListener('pointerleave', () => {
+          if (!this.restoring && !card.contains(this.host.ownerDocument.activeElement)) this.clearLinkedSoon();
+        });
+        card.addEventListener('focusin', () => this.linkTo(review.id, suggestion.id, true));
+        card.addEventListener('focusout', event => { if (!this.restoring && !card.contains(event.relatedTarget as Node | null)) this.clearLinkedSoon(); });
+        card.addEventListener('keydown', event => { if (event.key === 'Escape') this.clearLinked(); });
         card.append(element('span', 'ww-diff-label', '원문'), element('del', 'ww-before', suggestion.before), element('span', 'ww-diff-label', '제안'), element('ins', 'ww-after', suggestion.after || '(삭제)'));
         for (const sourceId of suggestion.sourceIds) { const source = review.sources.find(s => s.id === sourceId); if (source) this.source(card, source); }
         const decisionControls = element('div', 'ww-decision-controls');
@@ -302,6 +342,30 @@ export class WorkbenchUI {
       if (review.sources.length) { panel.append(element('h3', '', '참고 출처')); for (const source of review.sources) this.source(panel, source); }
     }
     this.composer(panel, true);
+  }
+  private linkTo(reviewId: string, suggestionId: string, immediate = false): void {
+    if (this.destroyed) return;
+    if (this.linkTimer) clearTimeout(this.linkTimer);
+    const show = () => { this.linkTimer = undefined; this.linked = { reviewId, suggestionId }; this.showLinked(!this.restoring); };
+    if (immediate) show(); else this.linkTimer = setTimeout(show, 120);
+  }
+  private showLinked(reveal: boolean): void {
+    if (!this.linked) return;
+    const review = this.workspace.project.reviews.find(r => r.id === this.linked!.reviewId);
+    const location = review ? suggestionLocation(this.workspace.project.draft, review, this.linked.suggestionId) : null;
+    if (!location || this.tab !== 'review') { this.clearLinked(); return; }
+    for (const card of this.host.querySelectorAll<HTMLElement>('.ww-suggestion')) card.classList.toggle('is-linked', card.dataset.wwAnchor === this.linked.suggestionId);
+    this.highlight?.show(location, reveal);
+  }
+  private clearLinkedSoon(): void {
+    if (this.destroyed) return;
+    if (this.linkTimer) clearTimeout(this.linkTimer);
+    this.linkTimer = setTimeout(() => this.clearLinked(), 120);
+  }
+  private clearLinked(): void {
+    if (this.linkTimer) clearTimeout(this.linkTimer);
+    this.linkTimer = undefined; this.linked = undefined; this.highlight?.clear();
+    for (const card of this.host.querySelectorAll('.ww-suggestion.is-linked')) card.classList.remove('is-linked');
   }
   private source(parent: HTMLElement, source: Review['sources'][number]): void {
     const container = element('div', 'ww-source');

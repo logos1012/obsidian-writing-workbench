@@ -12,6 +12,7 @@ export function buildPrompt(project: Project, preferences: Preferences, task: Ta
     '기본 평가 기준: 주장 명확성, 논리, 근거, 독자 가치, 문체. 근거 없는 숫자 점수는 만들지 않는다.',
     'preferences는 앞으로의 글에도 적용할 만한 명시적 문체 취향 후보만 담는다. 한 번 거절했다고 영구 취향으로 단정하지 않는다.',
     '승인된 취향만 일반 원칙으로 적용한다. 거절 기록은 현재 글의 편집 의도로 존중한다.',
+    'memo의 개요는 구조화된 Markdown으로 쓴다. 각 단계는 별도 줄의 번호 목록과 짧은 굵은 제목(예: 1. **도입**)으로, 그 아래 핵심 내용·근거는 들여쓴 하위 목록으로 정리한다. 번호와 여러 단계를 한 문장에 나열하지 않는다. 새로운 경험이나 근거는 만들지 않는다.',
     task === 'outline'
       ? '개요 정리: 지금까지의 답변에서 주제·관점·개요를 memo에 정리한다. message는 요약과 다음 작성 안내다. 완성 초안을 쓰지 않는다. question은 빈 문자열, suggestions와 diagnosis는 빈 배열이다.'
       : task === 'interview'
